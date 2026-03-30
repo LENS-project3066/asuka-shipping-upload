@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>写真アップロード</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; background: #f5f5f5; color: #333; padding: 20px; min-height: 100vh; }
+.container { max-width: 400px; margin: 0 auto; }
+h1 { font-size: 18px; text-align: center; margin-bottom: 8px; font-weight: 600; }
+.subtitle { text-align: center; color: #888; font-size: 13px; margin-bottom: 24px; }
+.card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; border: 1px solid #e0e0e0; }
+.preview-area { min-height: 120px; display: flex; align-items: center; justify-content: center; border: 2px dashed #ddd; border-radius: 6px; margin-bottom: 16px; overflow: hidden; }
+.preview-area img { max-width: 100%; max-height: 300px; border-radius: 4px; }
+.preview-area .placeholder { color: #bbb; font-size: 14px; }
+.btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; text-align: center; margin-bottom: 10px; }
+.btn-select { background: #fff; color: #1976d2; border: 2px solid #1976d2; }
+.btn-select:active { background: #e3f2fd; }
+.btn-upload { background: #1976d2; color: #fff; }
+.btn-upload:active { background: #1565c0; }
+.btn-upload:disabled { background: #bbb; }
+.status { text-align: center; padding: 16px; font-size: 15px; }
+.status-success { color: #2e7d32; font-weight: 600; }
+.status-error { color: #e53935; }
+.status-uploading { color: #1976d2; }
+.hidden { display: none; }
+input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>出荷マニュアル</h1>
+  <p class="subtitle">写真アップロード</p>
+
+  <div class="card" id="uploadCard">
+    <div class="preview-area" id="previewArea">
+      <span class="placeholder">写真を選んでください</span>
+    </div>
+    <input type="file" id="fileInput" accept="image/*">
+    <button class="btn btn-select" id="selectBtn">写真を選ぶ</button>
+    <button class="btn btn-upload hidden" id="uploadBtn" disabled>送信する</button>
+  </div>
+
+  <div class="status hidden" id="statusArea"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+(function() {
+  const SUPABASE_URL = 'https://imunxfojosnpoohbkuyd.supabase.co';
+  const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImltdW54Zm9qb3NucG9vaGJrdXlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMxODAyNzIsImV4cCI6MjA3ODc1NjI3Mn0.5opdeiZ-eAboMERcZKwD3F1K8Mrd8tu7v6D8f41qIS8';
+  const BUCKET = 'quality-docs';
+  const FOLDER = 'shipping-manuals';
+
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+
+  if (!token) {
+    showStatus('無効なリンクです', 'error');
+    return;
+  }
+
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  const fileInput = document.getElementById('fileInput');
+  const selectBtn = document.getElementById('selectBtn');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const previewArea = document.getElementById('previewArea');
+  let selectedFile = null;
+
+  // トークン検証
+  (async () => {
+    const { data, error } = await supabase
+      .from('js_shipping_manual_upload_tokens')
+      .select('status, expires_at, manual_id')
+      .eq('token', token)
+      .single();
+
+    if (error || !data) {
+      showStatus('無効なリンクです', 'error');
+      disableAll();
+      return;
+    }
+    if (data.status !== 'pending') {
+      showStatus('このリンクは使用済みです', 'error');
+      disableAll();
+      return;
+    }
+    if (new Date(data.expires_at) < new Date()) {
+      showStatus('リンクの有効期限が切れています。\nアプリ側でQRコードを再表示してください。', 'error');
+      disableAll();
+      return;
+    }
+  })();
+
+  selectBtn.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    selectedFile = file;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      previewArea.innerHTML = '<img src="' + ev.target.result + '">';
+    };
+    reader.readAsDataURL(file);
+    uploadBtn.classList.remove('hidden');
+    uploadBtn.disabled = false;
+  });
+
+  uploadBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    uploadBtn.disabled = true;
+    selectBtn.style.display = 'none';
+    showStatus('送信中...', 'uploading');
+
+    try {
+      // トークン情報取得
+      const { data: tokenData, error: tokenErr } = await supabase
+        .from('js_shipping_manual_upload_tokens')
+        .select('manual_id, step_id')
+        .eq('token', token)
+        .single();
+      if (tokenErr) throw new Error('トークン取得失敗');
+
+      // アップロード
+      const ext = selectedFile.name.split('.').pop().toLowerCase();
+      const storagePath = FOLDER + '/' + tokenData.manual_id + '/' + Date.now() + '_' + Math.random().toString(36).slice(2, 6) + '.' + ext;
+      const { error: uploadErr } = await supabase.storage
+        .from(BUCKET)
+        .upload(storagePath, selectedFile, { contentType: selectedFile.type, upsert: false });
+      if (uploadErr) throw new Error('アップロード失敗: ' + uploadErr.message);
+
+      // トークン更新
+      await supabase
+        .from('js_shipping_manual_upload_tokens')
+        .update({ status: 'uploaded', uploaded_path: storagePath })
+        .eq('token', token);
+
+      document.getElementById('uploadCard').classList.add('hidden');
+      showStatus('送信しました！\nこの画面を閉じてください。', 'success');
+    } catch (err) {
+      showStatus('エラー: ' + err.message, 'error');
+      uploadBtn.disabled = false;
+      selectBtn.style.display = 'block';
+    }
+  });
+
+  function showStatus(msg, type) {
+    const el = document.getElementById('statusArea');
+    el.classList.remove('hidden', 'status-success', 'status-error', 'status-uploading');
+    el.classList.add('status-' + type);
+    el.textContent = msg;
+    el.style.whiteSpace = 'pre-line';
+  }
+
+  function disableAll() {
+    selectBtn.disabled = true;
+    uploadBtn.disabled = true;
+    selectBtn.style.opacity = '0.5';
+  }
+})();
+</script>
+</body>
+</html>
