@@ -47,8 +47,8 @@ input[type="file"] { display: none; }
 </head>
 <body>
 <div class="container">
-  <h1>出荷マニュアル</h1>
-  <p class="subtitle">写真をPC側に送信します</p>
+  <h1 id="pageTitle">写真アップロード</h1>
+  <p class="subtitle" id="pageSubtitle">写真をPC側に送信します</p>
 
   <div class="btn-area">
     <button class="btn btn-camera" id="cameraBtn">📷 カメラで撮影</button>
@@ -71,6 +71,12 @@ input[type="file"] { display: none; }
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImltdW54Zm9qb3NucG9vaGJrdXlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMxODAyNzIsImV4cCI6MjA3ODc1NjI3Mn0.5opdeiZ-eAboMERcZKwD3F1K8Mrd8tu7v6D8f41qIS8';
   const BUCKET = 'quality-docs';
   const FOLDER = 'shipping-manuals/uploads';
+  var urlParams = new URLSearchParams(window.location.search);
+  var SOURCE = urlParams.get('source') || 'shipping';
+
+  // sourceに応じてタイトル変更
+  var titles = { shipping: '出荷マニュアル', quality: '不具合写真' };
+  document.getElementById('pageTitle').textContent = titles[SOURCE] || '写真アップロード';
 
   const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -168,7 +174,7 @@ input[type="file"] { display: none; }
         // uploaded_images テーブルに登録
         const { error: insertErr } = await supabase
           .from('js_uploaded_images')
-          .insert({ file_path: storagePath, file_name: item.file.name });
+          .insert({ file_path: storagePath, file_name: item.file.name, source: SOURCE });
         if (insertErr) throw insertErr;
 
         if (item.el) {
