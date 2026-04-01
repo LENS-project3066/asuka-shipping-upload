@@ -155,7 +155,9 @@ input[type="file"] { display: none; }
       showStatus('送信中... ' + (i + 1) + '/' + toUpload.length, 'uploading');
 
       try {
-        const ext = item.file.name.split('.').pop().toLowerCase();
+        var ext = (item.file.name.split('.').pop() || '').toLowerCase();
+        var allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'heic'];
+        if (allowedExts.indexOf(ext) === -1) throw new Error('未対応の画像形式です');
         const storagePath = FOLDER + '/' + Date.now() + '_' + Math.random().toString(36).slice(2, 6) + '.' + ext;
 
         const { error: uploadErr } = await supabase.storage
