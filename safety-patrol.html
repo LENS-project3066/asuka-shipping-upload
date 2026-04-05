@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>5S安全パトロール指摘登録</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; background: #f5f5f5; color: #333; padding: 16px; min-height: 100vh; }
+  .container { max-width: 440px; margin: 0 auto; }
+  h1 { font-size: 18px; text-align: center; margin-bottom: 4px; font-weight: 600; }
+  .subtitle { text-align: center; color: #888; font-size: 13px; margin-bottom: 20px; }
+
+  .form-group { margin-bottom: 14px; }
+  .form-label { display: block; font-size: 13px; font-weight: 600; color: #555; margin-bottom: 6px; }
+  .form-select,
+  .form-textarea,
+  .form-input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; background: #fff; font-family: inherit; }
+  .form-textarea { min-height: 80px; resize: vertical; }
+  .form-select:focus, .form-textarea:focus, .form-input:focus { outline: none; border-color: #1976d2; }
+
+  /* 写真エリア */
+  .photo-area { margin-bottom: 14px; }
+  .photo-btn-row { display: flex; gap: 10px; margin-bottom: 10px; }
+  .btn { padding: 14px 8px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; text-align: center; }
+  .btn-camera { flex: 1; background: #1976d2; color: #fff; }
+  .btn-camera:active { background: #1565c0; }
+  .btn-gallery { flex: 1; background: #fff; color: #1976d2; border: 2px solid #1976d2; }
+  .btn-gallery:active { background: #e3f2fd; }
+  input[type="file"] { display: none; }
+
+  .photo-preview { width: 100%; aspect-ratio: 4/3; border: 2px dashed #ddd; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 13px; overflow: hidden; position: relative; background: #fafafa; }
+  .photo-preview img { width: 100%; height: 100%; object-fit: cover; }
+  .photo-remove { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; background: rgba(0,0,0,0.7); color: #fff; border: none; border-radius: 50%; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+
+  /* 送信ボタン */
+  .btn-send { display: block; width: 100%; padding: 16px; background: #4caf50; color: #fff; border: none; border-radius: 8px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 8px; }
+  .btn-send:active { background: #388e3c; }
+  .btn-send:disabled { background: #bbb; cursor: not-allowed; }
+
+  /* ステータス */
+  .status { text-align: center; padding: 12px; font-size: 14px; border-radius: 6px; margin-bottom: 12px; }
+  .status-success { background: #e8f5e9; color: #2e7d32; }
+  .status-error { background: #ffebee; color: #e53935; }
+  .status-uploading { background: #e3f2fd; color: #1976d2; }
+  .hidden { display: none; }
+
+  /* カウンタ */
+  .counter { text-align: center; color: #888; font-size: 13px; margin: 8px 0; }
+
+  /* 拠点切替（小さく表示） */
+  .location-chip { display: inline-block; padding: 4px 12px; background: #e3f2fd; color: #1976d2; border-radius: 12px; font-size: 12px; font-weight: 600; margin-bottom: 10px; }
+  .location-change { text-decoration: underline; color: #1976d2; font-size: 12px; cursor: pointer; margin-left: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>📋 5S安全パトロール指摘登録</h1>
+  <p class="subtitle" id="pageSubtitle">現場で1件ずつ登録</p>
+
+  <!-- 拠点選択画面 -->
+  <div id="locationScreen">
+    <div class="form-group">
+      <label class="form-label">拠点を選択</label>
+      <button class="btn btn-camera" style="width:100%; margin-bottom:8px;" data-location="honsha">🏢 本社</button>
+      <button class="btn btn-camera" style="width:100%;" data-location="kitahora">🏭 北洞</button>
+    </div>
+  </div>
+
+  <!-- 登録フォーム画面 -->
+  <div id="formScreen" class="hidden">
+    <div>
+      <span class="location-chip" id="locationChip">本社</span>
+      <a class="location-change" id="changeLocationBtn">拠点を変える</a>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">職場 <span style="color:#e53935;">*</span></label>
+      <select class="form-select" id="workplaceSelect">
+        <option value="">-- 選択してください --</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">指摘内容 <span style="color:#e53935;">*</span></label>
+      <textarea class="form-textarea" id="commentInput" placeholder="例: 通路に段ボールが積み上げられている"></textarea>
+    </div>
+
+    <div class="photo-area">
+      <label class="form-label">写真 <span style="color:#e53935;">*</span></label>
+      <div class="photo-btn-row">
+        <button class="btn btn-camera" id="cameraBtn">📷 撮影</button>
+        <button class="btn btn-gallery" id="galleryBtn">🖼 写真を選ぶ</button>
+      </div>
+      <input type="file" id="cameraInput" accept="image/*" capture="environment">
+      <input type="file" id="galleryInput" accept="image/*">
+      <div class="photo-preview" id="photoPreview">写真を撮影または選択</div>
+    </div>
+
+    <div class="status hidden" id="statusArea"></div>
+    <button class="btn-send" id="sendBtn" disabled>送信する</button>
+    <div class="counter hidden" id="counter"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+(function() {
+  const SUPABASE_URL = 'https://imunxfojosnpoohbkuyd.supabase.co';
+  const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImltdW54Zm9qb3NucG9vaGJrdXlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMxODAyNzIsImV4cCI6MjA3ODc1NjI3Mn0.5opdeiZ-eAboMERcZKwD3F1K8Mrd8tu7v6D8f41qIS8';
+  const BUCKET = 'quality-docs';
+  const FOLDER = 'safety-patrol';
+
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  // DOM
+  const locationScreen = document.getElementById('locationScreen');
+  const formScreen = document.getElementById('formScreen');
+  const locationChip = document.getElementById('locationChip');
+  const changeLocationBtn = document.getElementById('changeLocationBtn');
+  const workplaceSelect = document.getElementById('workplaceSelect');
+  const commentInput = document.getElementById('commentInput');
+  const cameraBtn = document.getElementById('cameraBtn');
+  const galleryBtn = document.getElementById('galleryBtn');
+  const cameraInput = document.getElementById('cameraInput');
+  const galleryInput = document.getElementById('galleryInput');
+  const photoPreview = document.getElementById('photoPreview');
+  const sendBtn = document.getElementById('sendBtn');
+  const statusArea = document.getElementById('statusArea');
+  const counter = document.getElementById('counter');
+
+  // 状態
+  let currentLocation = null;
+  let workplaces = [];
+  let selectedFile = null;
+  let totalSubmitted = 0;
+
+  // 初期化
+  init();
+
+  async function init() {
+    // 拠点選択画面のイベント
+    document.querySelectorAll('[data-location]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const loc = btn.dataset.location;
+        sessionStorage.setItem('safetyPatrolLocation', loc);
+        showForm(loc);
+      });
+    });
+
+    // セッションに拠点が保存されていれば、そのままフォーム画面へ
+    const savedLocation = sessionStorage.getItem('safetyPatrolLocation');
+    if (savedLocation) {
+      showForm(savedLocation);
+    }
+
+    // 拠点変更ボタン
+    changeLocationBtn.addEventListener('click', () => {
+      sessionStorage.removeItem('safetyPatrolLocation');
+      formScreen.classList.add('hidden');
+      locationScreen.classList.remove('hidden');
+    });
+
+    // 写真関連
+    cameraBtn.addEventListener('click', () => cameraInput.click());
+    galleryBtn.addEventListener('click', () => galleryInput.click());
+    cameraInput.addEventListener('change', (e) => handlePhotoSelect(e.target.files[0]));
+    galleryInput.addEventListener('change', (e) => handlePhotoSelect(e.target.files[0]));
+
+    // 入力変更で送信ボタン更新
+    workplaceSelect.addEventListener('change', () => {
+      localStorage.setItem('safetyPatrolLastWorkplace', workplaceSelect.value);
+      updateSendBtn();
+    });
+    commentInput.addEventListener('input', updateSendBtn);
+
+    // 送信
+    sendBtn.addEventListener('click', submit);
+  }
+
+  async function showForm(location) {
+    currentLocation = location;
+    locationChip.textContent = location === 'honsha' ? '🏢 本社' : '🏭 北洞';
+    locationScreen.classList.add('hidden');
+    formScreen.classList.remove('hidden');
+    await loadWorkplaces(location);
+  }
+
+  async function loadWorkplaces(location) {
+    workplaceSelect.innerHTML = '<option value="">読み込み中...</option>';
+    const { data, error } = await supabase
+      .from('js_safety_workplaces')
+      .select('id, name')
+      .eq('location', location)
+      .eq('is_active', true)
+      .order('sort_order');
+
+    if (error) {
+      workplaceSelect.innerHTML = '<option value="">読込失敗</option>';
+      console.error(error);
+      return;
+    }
+
+    workplaces = data || [];
+    workplaceSelect.innerHTML = '<option value="">-- 選択してください --</option>' +
+      workplaces.map(w => `<option value="${w.id}">${w.name}</option>`).join('');
+
+    // 前回選択した職場を復元
+    const lastId = localStorage.getItem('safetyPatrolLastWorkplace');
+    if (lastId && workplaces.some(w => String(w.id) === String(lastId))) {
+      workplaceSelect.value = lastId;
+    }
+
+    updateSendBtn();
+  }
+
+  function handlePhotoSelect(file) {
+    if (!file) return;
+    selectedFile = file;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      photoPreview.innerHTML = `<img src="${e.target.result}" alt="preview"><button class="photo-remove" id="photoRemoveBtn">✕</button>`;
+      document.getElementById('photoRemoveBtn').addEventListener('click', () => {
+        selectedFile = null;
+        cameraInput.value = '';
+        galleryInput.value = '';
+        photoPreview.innerHTML = '写真を撮影または選択';
+        updateSendBtn();
+      });
+    };
+    reader.readAsDataURL(file);
+    updateSendBtn();
+  }
+
+  function updateSendBtn() {
+    const valid = workplaceSelect.value && commentInput.value.trim() && selectedFile;
+    sendBtn.disabled = !valid;
+  }
+
+  function showStatus(msg, type) {
+    statusArea.className = `status status-${type}`;
+    statusArea.textContent = msg;
+    statusArea.classList.remove('hidden');
+  }
+
+  function hideStatus() {
+    statusArea.classList.add('hidden');
+  }
+
+  async function submit() {
+    if (!selectedFile) return;
+    sendBtn.disabled = true;
+    showStatus('送信中...', 'uploading');
+
+    try {
+      // 1. Storage に写真アップロード
+      const ext = (selectedFile.name.split('.').pop() || 'jpg').toLowerCase();
+      const storagePath = `${FOLDER}/${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
+
+      const { error: uploadErr } = await supabase.storage
+        .from(BUCKET)
+        .upload(storagePath, selectedFile, {
+          contentType: selectedFile.type,
+          upsert: false
+        });
+      if (uploadErr) throw uploadErr;
+
+      // 2. js_safety_findings に INSERT
+      const today = new Date();
+      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+      const { error: insertErr } = await supabase
+        .from('js_safety_findings')
+        .insert({
+          patrol_date: dateStr,
+          location: currentLocation,
+          workplace_id: parseInt(workplaceSelect.value, 10),
+          comment: commentInput.value.trim(),
+          before_photo_path: storagePath,
+          created_by: 'mobile'
+        });
+      if (insertErr) throw insertErr;
+
+      // 成功
+      totalSubmitted++;
+      showStatus('✅ 送信完了', 'success');
+      counter.classList.remove('hidden');
+      counter.textContent = `本日の登録件数: ${totalSubmitted}件`;
+
+      // フォームクリア（次の指摘を登録しやすく）
+      setTimeout(() => {
+        commentInput.value = '';
+        selectedFile = null;
+        cameraInput.value = '';
+        galleryInput.value = '';
+        photoPreview.innerHTML = '写真を撮影または選択';
+        // 職場選択は記憶のまま残す（連続登録用）
+        updateSendBtn();
+        hideStatus();
+      }, 1500);
+
+    } catch (err) {
+      console.error('Submit error:', err);
+      showStatus(`エラー: ${err.message || '送信失敗'}`, 'error');
+      sendBtn.disabled = false;
+    }
+  }
+})();
+</script>
+</body>
+</html>
