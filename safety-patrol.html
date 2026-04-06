@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>5S安全パトロール指摘登録</title>
+<title>5S安全パトロール</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; background: #f5f5f5; color: #333; padding: 16px; min-height: 100vh; }
-  .container { max-width: 440px; margin: 0 auto; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; background: #f5f5f5; color: #333; min-height: 100vh; }
+  .container { max-width: 440px; margin: 0 auto; padding: 16px; }
   h1 { font-size: 18px; text-align: center; margin-bottom: 4px; font-weight: 600; }
   .subtitle { text-align: center; color: #888; font-size: 13px; margin-bottom: 20px; }
 
@@ -19,9 +19,6 @@
   .form-textarea { min-height: 80px; resize: vertical; }
   .form-select:focus, .form-textarea:focus, .form-input:focus { outline: none; border-color: #1976d2; }
 
-  /* 写真エリア */
-  .photo-area { margin-bottom: 14px; }
-  .photo-btn-row { display: flex; gap: 10px; margin-bottom: 10px; }
   .btn { padding: 14px 8px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; text-align: center; }
   .btn-camera { flex: 1; background: #1976d2; color: #fff; }
   .btn-camera:active { background: #1565c0; }
@@ -29,34 +26,67 @@
   .btn-gallery:active { background: #e3f2fd; }
   input[type="file"] { display: none; }
 
+  .photo-btn-row { display: flex; gap: 10px; margin-bottom: 10px; }
   .photo-preview { width: 100%; aspect-ratio: 4/3; border: 2px dashed #ddd; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 13px; overflow: hidden; position: relative; background: #fafafa; }
   .photo-preview img { width: 100%; height: 100%; object-fit: cover; }
   .photo-remove { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; background: rgba(0,0,0,0.7); color: #fff; border: none; border-radius: 50%; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 
-  /* 送信ボタン */
   .btn-send { display: block; width: 100%; padding: 16px; background: #4caf50; color: #fff; border: none; border-radius: 8px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 8px; }
   .btn-send:active { background: #388e3c; }
   .btn-send:disabled { background: #bbb; cursor: not-allowed; }
 
-  /* ステータス */
   .status { text-align: center; padding: 12px; font-size: 14px; border-radius: 6px; margin-bottom: 12px; }
   .status-success { background: #e8f5e9; color: #2e7d32; }
   .status-error { background: #ffebee; color: #e53935; }
   .status-uploading { background: #e3f2fd; color: #1976d2; }
   .hidden { display: none; }
 
-  /* カウンタ */
   .counter { text-align: center; color: #888; font-size: 13px; margin: 8px 0; }
 
-  /* 拠点切替（小さく表示） */
   .location-chip { display: inline-block; padding: 4px 12px; background: #e3f2fd; color: #1976d2; border-radius: 12px; font-size: 12px; font-weight: 600; margin-bottom: 10px; }
   .location-change { text-decoration: underline; color: #1976d2; font-size: 12px; cursor: pointer; margin-left: 8px; }
+
+  /* タブ */
+  .tab-bar {
+    display: flex; gap: 0; margin-bottom: 16px; border-radius: 10px; overflow: hidden;
+    border: 2px solid #1976d2;
+  }
+  .tab-btn {
+    flex: 1; padding: 12px 0; border: none; font-size: 14px; font-weight: 700;
+    cursor: pointer; text-align: center; transition: all 0.15s;
+    background: #fff; color: #1976d2;
+  }
+  .tab-btn.active { background: #1976d2; color: #fff; }
+  .tab-btn:not(.active):active { background: #e3f2fd; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* フォロー: 指摘カード */
+  .finding-card {
+    display: flex; gap: 12px; padding: 12px; margin-bottom: 8px;
+    background: #fff; border: 2px solid #ddd; border-radius: 10px; cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .finding-card:active { background: #f0f0f0; }
+  .finding-card.selected { border-color: #7b1fa2; background: #f3e5f9; }
+  .finding-card.done { opacity: 0.4; pointer-events: none; border-color: #ccc; }
+  .finding-thumb { width: 80px; height: 60px; border-radius: 6px; object-fit: cover; background: #eee; flex-shrink: 0; }
+  .finding-info { flex: 1; min-width: 0; }
+  .finding-workplace { font-size: 12px; font-weight: 600; color: #7b1fa2; margin-bottom: 2px; }
+  .finding-comment { font-size: 13px; color: #555; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .finding-date { font-size: 11px; color: #999; margin-top: 2px; }
+  .finding-done-badge { font-size: 11px; color: #2e7d32; font-weight: 600; }
+  .empty-msg { text-align: center; color: #999; font-size: 14px; padding: 40px 0; }
+
+  .follow-form { border-top: 2px solid #7b1fa2; padding-top: 16px; margin-top: 8px; }
+  .before-label { font-size: 12px; color: #999; margin-bottom: 4px; }
+  .before-photo { width: 100%; border-radius: 8px; margin-bottom: 12px; }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>📋 5S安全パトロール指摘登録</h1>
-  <p class="subtitle" id="pageSubtitle">現場で1件ずつ登録</p>
+  <h1>📋 5S安全パトロール</h1>
+  <p class="subtitle" id="pageSubtitle">指摘登録 & フォロー</p>
 
   <!-- 拠点選択画面 -->
   <div id="locationScreen">
@@ -67,39 +97,78 @@
     </div>
   </div>
 
-  <!-- 登録フォーム画面 -->
-  <div id="formScreen" class="hidden">
-    <div>
+  <!-- メイン画面 -->
+  <div id="mainScreen" class="hidden">
+    <div style="margin-bottom: 12px;">
       <span class="location-chip" id="locationChip">本社</span>
       <a class="location-change" id="changeLocationBtn">拠点を変える</a>
     </div>
 
-    <div class="form-group">
-      <label class="form-label">職場 <span style="color:#e53935;">*</span></label>
-      <select class="form-select" id="workplaceSelect">
-        <option value="">-- 選択してください --</option>
-      </select>
+    <!-- タブバー -->
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="follow">🔄 フォロー</button>
+      <button class="tab-btn" data-tab="new">📷 新規指摘</button>
     </div>
 
-    <div class="form-group">
-      <label class="form-label">指摘内容 <span style="color:#e53935;">*</span></label>
-      <textarea class="form-textarea" id="commentInput" placeholder="例: 通路に段ボールが積み上げられている"></textarea>
-    </div>
-
-    <div class="photo-area">
-      <label class="form-label">写真 <span style="color:#e53935;">*</span></label>
-      <div class="photo-btn-row">
-        <button class="btn btn-camera" id="cameraBtn">📷 撮影</button>
-        <button class="btn btn-gallery" id="galleryBtn">🖼 写真を選ぶ</button>
+    <!-- ============================== -->
+    <!-- フォロータブ -->
+    <!-- ============================== -->
+    <div class="tab-content active" id="tabFollow">
+      <div class="finding-list" id="findingList">
+        <div class="empty-msg">読み込み中...</div>
       </div>
-      <input type="file" id="cameraInput" accept="image/*" capture="environment">
-      <input type="file" id="galleryInput" accept="image/*">
-      <div class="photo-preview" id="photoPreview">写真を撮影または選択</div>
+
+      <div id="followForm" class="follow-form hidden">
+        <div class="before-label">Before写真</div>
+        <img class="before-photo" id="beforePhoto" src="" alt="before">
+
+        <div class="photo-area">
+          <label class="form-label">After写真 <span style="color:#e53935;">*</span></label>
+          <div class="photo-btn-row">
+            <button class="btn btn-camera" id="followCameraBtn">📷 撮影</button>
+            <button class="btn btn-gallery" id="followGalleryBtn">🖼 写真を選ぶ</button>
+          </div>
+          <input type="file" id="followCameraInput" accept="image/*" capture="environment">
+          <input type="file" id="followGalleryInput" accept="image/*">
+          <div class="photo-preview" id="followPhotoPreview">After写真を撮影または選択</div>
+        </div>
+
+        <div class="status hidden" id="followStatus"></div>
+        <button class="btn-send" id="followSendBtn" disabled>フォローを送信</button>
+      </div>
     </div>
 
-    <div class="status hidden" id="statusArea"></div>
-    <button class="btn-send" id="sendBtn" disabled>送信する</button>
-    <div class="counter hidden" id="counter"></div>
+    <!-- ============================== -->
+    <!-- 新規指摘タブ -->
+    <!-- ============================== -->
+    <div class="tab-content" id="tabNew">
+      <div class="form-group">
+        <label class="form-label">職場 <span style="color:#e53935;">*</span></label>
+        <select class="form-select" id="workplaceSelect">
+          <option value="">-- 選択してください --</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">指摘内容 <span style="color:#e53935;">*</span></label>
+        <textarea class="form-textarea" id="commentInput" placeholder="例: 通路に段ボールが積み上げられている"></textarea>
+      </div>
+
+      <div class="photo-area">
+        <label class="form-label">写真 <span style="color:#e53935;">*</span></label>
+        <div class="photo-btn-row">
+          <button class="btn btn-camera" id="newCameraBtn">📷 撮影</button>
+          <button class="btn btn-gallery" id="newGalleryBtn">🖼 写真を選ぶ</button>
+        </div>
+        <input type="file" id="newCameraInput" accept="image/*" capture="environment">
+        <input type="file" id="newGalleryInput" accept="image/*">
+        <div class="photo-preview" id="newPhotoPreview">写真を撮影または選択</div>
+      </div>
+
+      <div class="status hidden" id="newStatus"></div>
+      <button class="btn-send" id="newSendBtn" disabled>送信する</button>
+      <div class="counter hidden" id="newCounter"></div>
+    </div>
   </div>
 </div>
 
@@ -110,200 +179,352 @@
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImltdW54Zm9qb3NucG9vaGJrdXlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMxODAyNzIsImV4cCI6MjA3ODc1NjI3Mn0.5opdeiZ-eAboMERcZKwD3F1K8Mrd8tu7v6D8f41qIS8';
   const BUCKET = 'quality-docs';
   const FOLDER = 'safety-patrol';
-
   const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  // DOM
+  // 共通DOM
   const locationScreen = document.getElementById('locationScreen');
-  const formScreen = document.getElementById('formScreen');
+  const mainScreen = document.getElementById('mainScreen');
   const locationChip = document.getElementById('locationChip');
   const changeLocationBtn = document.getElementById('changeLocationBtn');
+
+  // フォロータブDOM
+  const findingList = document.getElementById('findingList');
+  const followForm = document.getElementById('followForm');
+  const beforePhoto = document.getElementById('beforePhoto');
+  const followCameraBtn = document.getElementById('followCameraBtn');
+  const followGalleryBtn = document.getElementById('followGalleryBtn');
+  const followCameraInput = document.getElementById('followCameraInput');
+  const followGalleryInput = document.getElementById('followGalleryInput');
+  const followPhotoPreview = document.getElementById('followPhotoPreview');
+  const followSendBtn = document.getElementById('followSendBtn');
+  const followStatus = document.getElementById('followStatus');
+
+  // 新規タブDOM
   const workplaceSelect = document.getElementById('workplaceSelect');
   const commentInput = document.getElementById('commentInput');
-  const cameraBtn = document.getElementById('cameraBtn');
-  const galleryBtn = document.getElementById('galleryBtn');
-  const cameraInput = document.getElementById('cameraInput');
-  const galleryInput = document.getElementById('galleryInput');
-  const photoPreview = document.getElementById('photoPreview');
-  const sendBtn = document.getElementById('sendBtn');
-  const statusArea = document.getElementById('statusArea');
-  const counter = document.getElementById('counter');
+  const newCameraBtn = document.getElementById('newCameraBtn');
+  const newGalleryBtn = document.getElementById('newGalleryBtn');
+  const newCameraInput = document.getElementById('newCameraInput');
+  const newGalleryInput = document.getElementById('newGalleryInput');
+  const newPhotoPreview = document.getElementById('newPhotoPreview');
+  const newSendBtn = document.getElementById('newSendBtn');
+  const newStatus = document.getElementById('newStatus');
+  const newCounter = document.getElementById('newCounter');
 
   // 状態
   let currentLocation = null;
-  let workplaces = [];
-  let selectedFile = null;
+  let findings = [];
+  let selectedFindingId = null;
+  let followFile = null;
+  let newFile = null;
   let totalSubmitted = 0;
 
-  // 初期化
   init();
 
-  async function init() {
-    // 拠点選択画面のイベント
+  function init() {
+    // 拠点選択
     document.querySelectorAll('[data-location]').forEach(btn => {
       btn.addEventListener('click', () => {
         const loc = btn.dataset.location;
         sessionStorage.setItem('safetyPatrolLocation', loc);
-        showForm(loc);
+        showMain(loc);
       });
     });
+    const saved = sessionStorage.getItem('safetyPatrolLocation');
+    if (saved) showMain(saved);
 
-    // セッションに拠点が保存されていれば、そのままフォーム画面へ
-    const savedLocation = sessionStorage.getItem('safetyPatrolLocation');
-    if (savedLocation) {
-      showForm(savedLocation);
-    }
-
-    // 拠点変更ボタン
     changeLocationBtn.addEventListener('click', () => {
       sessionStorage.removeItem('safetyPatrolLocation');
-      formScreen.classList.add('hidden');
+      mainScreen.classList.add('hidden');
       locationScreen.classList.remove('hidden');
     });
 
-    // 写真関連
-    cameraBtn.addEventListener('click', () => cameraInput.click());
-    galleryBtn.addEventListener('click', () => galleryInput.click());
-    cameraInput.addEventListener('change', (e) => handlePhotoSelect(e.target.files[0]));
-    galleryInput.addEventListener('change', (e) => handlePhotoSelect(e.target.files[0]));
+    // タブ切替
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(btn.dataset.tab === 'follow' ? 'tabFollow' : 'tabNew').classList.add('active');
+      });
+    });
 
-    // 入力変更で送信ボタン更新
+    // フォロー: 写真
+    followCameraBtn.addEventListener('click', () => followCameraInput.click());
+    followGalleryBtn.addEventListener('click', () => followGalleryInput.click());
+    followCameraInput.addEventListener('change', (e) => handlePhoto(e.target.files[0], 'follow'));
+    followGalleryInput.addEventListener('change', (e) => handlePhoto(e.target.files[0], 'follow'));
+    followSendBtn.addEventListener('click', submitFollow);
+
+    // 新規: 写真
+    newCameraBtn.addEventListener('click', () => newCameraInput.click());
+    newGalleryBtn.addEventListener('click', () => newGalleryInput.click());
+    newCameraInput.addEventListener('change', (e) => handlePhoto(e.target.files[0], 'new'));
+    newGalleryInput.addEventListener('change', (e) => handlePhoto(e.target.files[0], 'new'));
     workplaceSelect.addEventListener('change', () => {
       localStorage.setItem('safetyPatrolLastWorkplace', workplaceSelect.value);
-      updateSendBtn();
+      updateNewSendBtn();
     });
-    commentInput.addEventListener('input', updateSendBtn);
-
-    // 送信
-    sendBtn.addEventListener('click', submit);
+    commentInput.addEventListener('input', updateNewSendBtn);
+    newSendBtn.addEventListener('click', submitNew);
   }
 
-  async function showForm(location) {
+  async function showMain(location) {
     currentLocation = location;
     locationChip.textContent = location === 'honsha' ? '🏢 本社' : '🏭 北洞';
     locationScreen.classList.add('hidden');
-    formScreen.classList.remove('hidden');
-    await loadWorkplaces(location);
+    mainScreen.classList.remove('hidden');
+    await Promise.all([loadFindings(location), loadWorkplaces(location)]);
   }
+
+  // ========================================
+  // フォロータブ
+  // ========================================
+
+  async function loadFindings(location) {
+    findingList.innerHTML = '<div class="empty-msg">読み込み中...</div>';
+    followForm.classList.add('hidden');
+    selectedFindingId = null;
+
+    const now = new Date();
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const dateFrom = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-01`;
+    const lastDay = new Date(prev.getFullYear(), prev.getMonth() + 1, 0).getDate();
+    const dateTo = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const { data, error } = await supabase
+      .from('js_safety_findings')
+      .select('id, patrol_date, location, workplace_id, comment, before_photo_path, after_photo_path, dismissed_at')
+      .eq('location', location)
+      .gte('patrol_date', dateFrom)
+      .lte('patrol_date', dateTo)
+      .is('dismissed_at', null)
+      .order('patrol_date')
+      .order('workplace_id');
+
+    if (error) { findingList.innerHTML = '<div class="empty-msg">読込エラー</div>'; return; }
+
+    const { data: wps } = await supabase.from('js_safety_workplaces').select('id, name').eq('location', location);
+    const wpMap = {};
+    (wps || []).forEach(w => { wpMap[w.id] = w.name; });
+
+    findings = (data || []).map(f => ({
+      ...f,
+      workplace_name: wpMap[f.workplace_id] || '不明',
+      before_url: f.before_photo_path ? getPublicUrl(f.before_photo_path) : null,
+      isDone: !!f.after_photo_path
+    }));
+    renderFindingList();
+  }
+
+  function getPublicUrl(path) {
+    return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
+  }
+
+  function renderFindingList() {
+    const undone = findings.filter(f => !f.isDone);
+    const done = findings.filter(f => f.isDone);
+
+    if (findings.length === 0) {
+      findingList.innerHTML = '<div class="empty-msg">前月の指摘がありません</div>';
+      return;
+    }
+    findingList.innerHTML = '';
+
+    if (undone.length === 0) {
+      const msg = document.createElement('div');
+      msg.className = 'empty-msg';
+      msg.textContent = '全件フォロー完了!';
+      findingList.appendChild(msg);
+    }
+
+    undone.forEach(f => findingList.appendChild(createCard(f, false)));
+    done.forEach(f => findingList.appendChild(createCard(f, true)));
+  }
+
+  function createCard(f, isDone) {
+    const card = document.createElement('div');
+    card.className = 'finding-card' + (isDone ? ' done' : '') + (f.id === selectedFindingId ? ' selected' : '');
+    card.innerHTML = `
+      ${f.before_url ? `<img class="finding-thumb" src="${f.before_url}" alt="">` : '<div class="finding-thumb"></div>'}
+      <div class="finding-info">
+        <div class="finding-workplace">${esc(f.workplace_name)}</div>
+        <div class="finding-comment">${esc(f.comment || '')}</div>
+        <div class="finding-date">${f.patrol_date}${isDone ? ' <span class="finding-done-badge">✓ フォロー済み</span>' : ''}</div>
+      </div>
+    `;
+    if (!isDone) card.addEventListener('click', () => selectFinding(f));
+    return card;
+  }
+
+  function selectFinding(f) {
+    selectedFindingId = f.id;
+    followFile = null;
+    followCameraInput.value = '';
+    followGalleryInput.value = '';
+    followPhotoPreview.innerHTML = 'After写真を撮影または選択';
+    followStatus.classList.add('hidden');
+    updateFollowSendBtn();
+
+    findingList.querySelectorAll('.finding-card').forEach(c => c.classList.remove('selected'));
+    const undone = findings.filter(x => !x.isDone);
+    const cards = findingList.querySelectorAll('.finding-card:not(.done)');
+    cards.forEach((c, i) => { if (undone[i] && undone[i].id === f.id) c.classList.add('selected'); });
+
+    beforePhoto.src = f.before_url || '';
+    followForm.classList.remove('hidden');
+    setTimeout(() => followForm.scrollIntoView({ behavior: 'smooth' }), 100);
+  }
+
+  function updateFollowSendBtn() {
+    followSendBtn.disabled = !(selectedFindingId && followFile);
+  }
+
+  async function submitFollow() {
+    if (!selectedFindingId || !followFile) return;
+    followSendBtn.disabled = true;
+    showStatusEl(followStatus, '送信中...', 'uploading');
+
+    try {
+      const ext = (followFile.name.split('.').pop() || 'jpg').toLowerCase();
+      const storagePath = `${FOLDER}/${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
+
+      const { error: upErr } = await supabase.storage.from(BUCKET).upload(storagePath, followFile, { contentType: followFile.type, upsert: false });
+      if (upErr) throw upErr;
+
+      const { error: updErr } = await supabase.from('js_safety_findings').update({
+        after_photo_path: storagePath,
+        follow_comment: null,
+        followed_at: new Date().toISOString()
+      }).eq('id', selectedFindingId);
+      if (updErr) throw updErr;
+
+      showStatusEl(followStatus, '✅ フォロー送信完了', 'success');
+      const f = findings.find(x => x.id === selectedFindingId);
+      if (f) f.isDone = true;
+      selectedFindingId = null;
+
+      setTimeout(() => {
+        followForm.classList.add('hidden');
+        renderFindingList();
+        followStatus.classList.add('hidden');
+      }, 1500);
+    } catch (err) {
+      showStatusEl(followStatus, `エラー: ${err.message || '送信失敗'}`, 'error');
+      followSendBtn.disabled = false;
+    }
+  }
+
+  // ========================================
+  // 新規指摘タブ
+  // ========================================
 
   async function loadWorkplaces(location) {
     workplaceSelect.innerHTML = '<option value="">読み込み中...</option>';
     const { data, error } = await supabase
-      .from('js_safety_workplaces')
-      .select('id, name')
-      .eq('location', location)
-      .eq('is_active', true)
-      .order('sort_order');
+      .from('js_safety_workplaces').select('id, name')
+      .eq('location', location).eq('is_active', true).order('sort_order');
 
-    if (error) {
-      workplaceSelect.innerHTML = '<option value="">読込失敗</option>';
-      console.error(error);
-      return;
-    }
+    if (error) { workplaceSelect.innerHTML = '<option value="">読込失敗</option>'; return; }
 
-    workplaces = data || [];
     workplaceSelect.innerHTML = '<option value="">-- 選択してください --</option>' +
-      workplaces.map(w => `<option value="${w.id}">${w.name}</option>`).join('');
+      (data || []).map(w => `<option value="${w.id}">${w.name}</option>`).join('');
 
-    // 前回選択した職場を復元
     const lastId = localStorage.getItem('safetyPatrolLastWorkplace');
-    if (lastId && workplaces.some(w => String(w.id) === String(lastId))) {
-      workplaceSelect.value = lastId;
-    }
-
-    updateSendBtn();
+    if (lastId && (data || []).some(w => String(w.id) === String(lastId))) workplaceSelect.value = lastId;
+    updateNewSendBtn();
   }
 
-  function handlePhotoSelect(file) {
-    if (!file) return;
-    selectedFile = file;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      photoPreview.innerHTML = `<img src="${e.target.result}" alt="preview"><button class="photo-remove" id="photoRemoveBtn">✕</button>`;
-      document.getElementById('photoRemoveBtn').addEventListener('click', () => {
-        selectedFile = null;
-        cameraInput.value = '';
-        galleryInput.value = '';
-        photoPreview.innerHTML = '写真を撮影または選択';
-        updateSendBtn();
-      });
-    };
-    reader.readAsDataURL(file);
-    updateSendBtn();
+  function updateNewSendBtn() {
+    newSendBtn.disabled = !(workplaceSelect.value && commentInput.value.trim() && newFile);
   }
 
-  function updateSendBtn() {
-    const valid = workplaceSelect.value && commentInput.value.trim() && selectedFile;
-    sendBtn.disabled = !valid;
-  }
-
-  function showStatus(msg, type) {
-    statusArea.className = `status status-${type}`;
-    statusArea.textContent = msg;
-    statusArea.classList.remove('hidden');
-  }
-
-  function hideStatus() {
-    statusArea.classList.add('hidden');
-  }
-
-  async function submit() {
-    if (!selectedFile) return;
-    sendBtn.disabled = true;
-    showStatus('送信中...', 'uploading');
+  async function submitNew() {
+    if (!newFile) return;
+    newSendBtn.disabled = true;
+    showStatusEl(newStatus, '送信中...', 'uploading');
 
     try {
-      // 1. Storage に写真アップロード
-      const ext = (selectedFile.name.split('.').pop() || 'jpg').toLowerCase();
+      const ext = (newFile.name.split('.').pop() || 'jpg').toLowerCase();
       const storagePath = `${FOLDER}/${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
 
-      const { error: uploadErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(storagePath, selectedFile, {
-          contentType: selectedFile.type,
-          upsert: false
-        });
-      if (uploadErr) throw uploadErr;
+      const { error: upErr } = await supabase.storage.from(BUCKET).upload(storagePath, newFile, { contentType: newFile.type, upsert: false });
+      if (upErr) throw upErr;
 
-      // 2. js_safety_findings に INSERT
       const today = new Date();
       const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-      const { error: insertErr } = await supabase
-        .from('js_safety_findings')
-        .insert({
-          patrol_date: dateStr,
-          location: currentLocation,
-          workplace_id: parseInt(workplaceSelect.value, 10),
-          comment: commentInput.value.trim(),
-          before_photo_path: storagePath,
-          created_by: 'mobile'
-        });
-      if (insertErr) throw insertErr;
+      const { error: insErr } = await supabase.from('js_safety_findings').insert({
+        patrol_date: dateStr,
+        location: currentLocation,
+        workplace_id: parseInt(workplaceSelect.value, 10),
+        comment: commentInput.value.trim(),
+        before_photo_path: storagePath,
+        created_by: 'mobile'
+      });
+      if (insErr) throw insErr;
 
-      // 成功
       totalSubmitted++;
-      showStatus('✅ 送信完了', 'success');
-      counter.classList.remove('hidden');
-      counter.textContent = `本日の登録件数: ${totalSubmitted}件`;
+      showStatusEl(newStatus, '✅ 送信完了', 'success');
+      newCounter.classList.remove('hidden');
+      newCounter.textContent = `本日の登録件数: ${totalSubmitted}件`;
 
-      // フォームクリア（次の指摘を登録しやすく）
       setTimeout(() => {
         commentInput.value = '';
-        selectedFile = null;
+        newFile = null;
+        newCameraInput.value = '';
+        newGalleryInput.value = '';
+        newPhotoPreview.innerHTML = '写真を撮影または選択';
+        updateNewSendBtn();
+        newStatus.classList.add('hidden');
+      }, 1500);
+    } catch (err) {
+      showStatusEl(newStatus, `エラー: ${err.message || '送信失敗'}`, 'error');
+      newSendBtn.disabled = false;
+    }
+  }
+
+  // ========================================
+  // 共通ユーティリティ
+  // ========================================
+
+  function handlePhoto(file, mode) {
+    if (!file) return;
+    const preview = mode === 'follow' ? followPhotoPreview : newPhotoPreview;
+    const cameraInput = mode === 'follow' ? followCameraInput : newCameraInput;
+    const galleryInput = mode === 'follow' ? followGalleryInput : newGalleryInput;
+
+    if (mode === 'follow') followFile = file;
+    else newFile = file;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      preview.innerHTML = `<img src="${e.target.result}" alt="preview"><button class="photo-remove">✕</button>`;
+      preview.querySelector('.photo-remove').addEventListener('click', () => {
+        if (mode === 'follow') followFile = null;
+        else newFile = null;
         cameraInput.value = '';
         galleryInput.value = '';
-        photoPreview.innerHTML = '写真を撮影または選択';
-        // 職場選択は記憶のまま残す（連続登録用）
-        updateSendBtn();
-        hideStatus();
-      }, 1500);
+        preview.innerHTML = mode === 'follow' ? 'After写真を撮影または選択' : '写真を撮影または選択';
+        if (mode === 'follow') updateFollowSendBtn();
+        else updateNewSendBtn();
+      });
+    };
+    reader.readAsDataURL(file);
+    if (mode === 'follow') updateFollowSendBtn();
+    else updateNewSendBtn();
+  }
 
-    } catch (err) {
-      console.error('Submit error:', err);
-      showStatus(`エラー: ${err.message || '送信失敗'}`, 'error');
-      sendBtn.disabled = false;
-    }
+  function showStatusEl(el, msg, type) {
+    el.className = `status status-${type}`;
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+
+  function esc(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
   }
 })();
 </script>
