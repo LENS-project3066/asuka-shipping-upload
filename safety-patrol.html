@@ -114,6 +114,10 @@
     <!-- フォロータブ -->
     <!-- ============================== -->
     <div class="tab-content active" id="tabFollow">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label" for="followMonthInput">対象月</label>
+        <input type="month" class="form-input" id="followMonthInput">
+      </div>
       <div class="finding-list" id="findingList">
         <div class="empty-msg">読み込み中...</div>
       </div>
@@ -188,6 +192,7 @@
   const changeLocationBtn = document.getElementById('changeLocationBtn');
 
   // フォロータブDOM
+  const followMonthInput = document.getElementById('followMonthInput');
   const findingList = document.getElementById('findingList');
   const followForm = document.getElementById('followForm');
   const beforePhoto = document.getElementById('beforePhoto');
@@ -222,6 +227,14 @@
   init();
 
   function init() {
+    // フォロー: 対象月のデフォルトは先月 (showMain → loadFindings が値を参照するので最初にセット)
+    const now = new Date();
+    const defaultFollow = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    followMonthInput.value = `${defaultFollow.getFullYear()}-${String(defaultFollow.getMonth() + 1).padStart(2, '0')}`;
+    followMonthInput.addEventListener('change', () => {
+      if (currentLocation) loadFindings(currentLocation);
+    });
+
     // 拠点選択
     document.querySelectorAll('[data-location]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -286,11 +299,13 @@
     followForm.classList.add('hidden');
     selectedFindingId = null;
 
-    const now = new Date();
-    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const dateFrom = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-01`;
-    const lastDay = new Date(prev.getFullYear(), prev.getMonth() + 1, 0).getDate();
-    const dateTo = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    // 対象月セレクタの値で指摘を絞り込む (デフォルトは先月)
+    const monthVal = followMonthInput.value;
+    if (!monthVal) return;
+    const [y, m] = monthVal.split('-').map(Number);
+    const dateFrom = `${y}-${String(m).padStart(2, '0')}-01`;
+    const lastDay = new Date(y, m, 0).getDate();
+    const dateTo = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
     const { data, error } = await supabase
       .from('js_safety_findings')
@@ -326,7 +341,7 @@
     const done = findings.filter(f => f.isDone);
 
     if (findings.length === 0) {
-      findingList.innerHTML = '<div class="empty-msg">前月の指摘がありません</div>';
+      findingList.innerHTML = '<div class="empty-msg">この月の指摘がありません</div>';
       return;
     }
     findingList.innerHTML = '';
