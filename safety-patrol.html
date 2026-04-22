@@ -327,6 +327,7 @@
       ...f,
       workplace_name: wpMap[f.workplace_id] || '不明',
       before_url: f.before_photo_path ? getPublicUrl(f.before_photo_path) : null,
+      before_thumb_url: f.before_photo_path ? getThumbUrl(f.before_photo_path, 200) : null,
       isDone: !!f.after_photo_path
     }));
     renderFindingList();
@@ -334,6 +335,12 @@
 
   function getPublicUrl(path) {
     return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
+  }
+
+  // Supabase Image Transform (Pro プラン以上で使用可)。サムネ取得の高速化用。
+  // 原寸が必要な箇所 (Before 写真の大表示・Electron 側) は getPublicUrl を使う。
+  function getThumbUrl(path, width) {
+    return `${SUPABASE_URL}/storage/v1/render/image/public/${BUCKET}/${path}?width=${width}&quality=60&resize=cover`;
   }
 
   function renderFindingList() {
@@ -361,7 +368,7 @@
     const card = document.createElement('div');
     card.className = 'finding-card' + (isDone ? ' done' : '') + (f.id === selectedFindingId ? ' selected' : '');
     card.innerHTML = `
-      ${f.before_url ? `<img class="finding-thumb" src="${f.before_url}" alt="">` : '<div class="finding-thumb"></div>'}
+      ${f.before_thumb_url ? `<img class="finding-thumb" src="${f.before_thumb_url}" alt="" loading="lazy">` : '<div class="finding-thumb"></div>'}
       <div class="finding-info">
         <div class="finding-workplace">${esc(f.workplace_name)}</div>
         <div class="finding-comment">${esc(f.comment || '')}</div>
