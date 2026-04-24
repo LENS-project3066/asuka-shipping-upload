@@ -70,23 +70,22 @@
   }
   .finding-card:active { background: #f0f0f0; }
   .finding-card.selected { border-color: #7b1fa2; background: #f3e5f9; }
-  /* 完了カード: opacity は使わない（子ボタンまで薄くなって押せないように見える）。
-     代わりに背景・文字色を薄めて視覚的に「完了」を表現。 */
-  .finding-card.done { pointer-events: none; border-color: #ddd; background: #fafafa; color: #bbb; }
+  /* 完了カード: 閲覧は可能（タップで Before/After を確認できる）。
+     色の薄化で完了状態を視覚的に表現。 */
+  .finding-card.done { border-color: #ddd; background: #fafafa; color: #bbb; }
   .finding-card.done .finding-thumb { opacity: 0.5; }
+  .finding-card.done .finding-comment { color: #aaa; }
   .finding-thumb { width: 80px; height: 60px; border-radius: 6px; object-fit: cover; background: #eee; flex-shrink: 0; }
   .finding-info { flex: 1; min-width: 0; }
   .finding-workplace { font-size: 12px; font-weight: 600; color: #7b1fa2; margin-bottom: 2px; }
   .finding-comment { font-size: 13px; color: #555; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .finding-date { font-size: 11px; color: #999; margin-top: 2px; }
   .finding-done-badge { font-size: 11px; color: #2e7d32; font-weight: 600; }
-  /* done カードは pointer-events:none だが、このボタンだけは押せるように auto に戻す。
-     親カードの右下に絶対配置（フォロー済みバッジと並ぶと見づらいので分離）。 */
+  /* 取消ボタン: カード右下に絶対配置。カードクリック(閲覧)と区別しやすく赤系で。 */
   .finding-reset-btn {
     position: absolute;
     bottom: 8px;
     right: 8px;
-    pointer-events: auto;
     padding: 4px 12px;
     font-size: 11px;
     border: 1px solid #d32f2f;
@@ -97,6 +96,43 @@
     font-weight: 600;
   }
   .finding-reset-btn:active { background: #ffebee; }
+
+  /* Before/After 閲覧オーバーレイ */
+  .photo-view-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 1000;
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 20px 12px;
+    overflow-y: auto;
+  }
+  .photo-view-dialog {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px 16px 20px;
+    max-width: 440px;
+    width: 100%;
+    position: relative;
+  }
+  .photo-view-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 50%;
+    background: #eee;
+    font-size: 18px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .photo-view-close:active { background: #ccc; }
+  .photo-view-title { font-size: 14px; font-weight: 600; color: #7b1fa2; padding-right: 40px; }
+  .photo-view-date { font-size: 11px; color: #999; margin-top: 2px; }
+  .photo-view-comment { font-size: 13px; color: #555; margin-top: 8px; white-space: pre-wrap; }
+  .photo-view-label { font-size: 12px; font-weight: 600; color: #555; margin: 14px 0 6px; }
+  .photo-view-img { width: 100%; border-radius: 8px; display: block; }
   .empty-msg { text-align: center; color: #999; font-size: 14px; padding: 40px 0; }
 
   .follow-form { border-top: 2px solid #7b1fa2; padding-top: 16px; margin-top: 8px; }
@@ -397,7 +433,11 @@
       </div>
       ${isDone ? `<button class="finding-reset-btn" data-reset-id="${f.id}" title="対象違いの写真をアップした時の取消">↺ 取消</button>` : ''}
     `;
-    if (!isDone) card.addEventListener('click', () => selectFinding(f));
+    // カードクリック: 未完了 → 選択してフォロー画面へ / 完了 → Before/After 閲覧
+    card.addEventListener('click', () => {
+      if (isDone) showFindingPhotos(f);
+      else selectFinding(f);
+    });
     // done カードの「↺ 取消」ボタン
     const resetBtn = card.querySelector('.finding-reset-btn');
     if (resetBtn) {
@@ -419,6 +459,31 @@
       });
     }
     return card;
+  }
+
+  // 完了済みカードの Before/After 閲覧オーバーレイ
+  function showFindingPhotos(f) {
+    document.querySelector('.photo-view-overlay')?.remove();
+    const afterUrl = f.after_photo_path ? getPublicUrl(f.after_photo_path) : null;
+    const overlay = document.createElement('div');
+    overlay.className = 'photo-view-overlay';
+    overlay.innerHTML = `
+      <div class="photo-view-dialog">
+        <button class="photo-view-close" aria-label="閉じる">✕</button>
+        <div class="photo-view-title">${esc(f.workplace_name || '')}</div>
+        <div class="photo-view-date">${f.patrol_date}</div>
+        <div class="photo-view-comment">${esc(f.comment || '')}</div>
+        <div class="photo-view-label">📷 Before</div>
+        <img class="photo-view-img" src="${f.before_url || ''}" alt="before">
+        ${afterUrl ? `<div class="photo-view-label">✅ After</div><img class="photo-view-img" src="${afterUrl}" alt="after">` : ''}
+      </div>
+    `;
+    // 背景クリックで閉じる（ダイアログ内クリックは伝播させない）
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    overlay.querySelector('.photo-view-close').addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
   }
 
   function selectFinding(f) {
