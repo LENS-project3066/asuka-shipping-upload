@@ -76,6 +76,19 @@
   .finding-comment { font-size: 13px; color: #555; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .finding-date { font-size: 11px; color: #999; margin-top: 2px; }
   .finding-done-badge { font-size: 11px; color: #2e7d32; font-weight: 600; }
+  /* done カードは pointer-events:none だが、このボタンだけは押せるように auto に戻す */
+  .finding-reset-btn {
+    pointer-events: auto;
+    margin-left: 8px;
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid #bbb;
+    border-radius: 4px;
+    background: #fff;
+    color: #666;
+    cursor: pointer;
+  }
+  .finding-reset-btn:active { background: #eee; }
   .empty-msg { text-align: center; color: #999; font-size: 14px; padding: 40px 0; }
 
   .follow-form { border-top: 2px solid #7b1fa2; padding-top: 16px; margin-top: 8px; }
@@ -372,10 +385,30 @@
       <div class="finding-info">
         <div class="finding-workplace">${esc(f.workplace_name)}</div>
         <div class="finding-comment">${esc(f.comment || '')}</div>
-        <div class="finding-date">${f.patrol_date}${isDone ? ' <span class="finding-done-badge">✓ フォロー済み</span>' : ''}</div>
+        <div class="finding-date">${f.patrol_date}${isDone ? ` <span class="finding-done-badge">✓ フォロー済み</span><button class="finding-reset-btn" data-reset-id="${f.id}" title="対象違いの写真をアップした時の取消">↺ 取消</button>` : ''}</div>
       </div>
     `;
     if (!isDone) card.addEventListener('click', () => selectFinding(f));
+    // done カードの「↺ 取消」ボタン
+    const resetBtn = card.querySelector('.finding-reset-btn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = Number(resetBtn.dataset.resetId);
+        if (!id) return;
+        if (!confirm('このAfter写真を取り消して撮り直しますか？\n（対象違いの写真をアップしてしまった時の救済用）')) return;
+        try {
+          const { error } = await supabase
+            .from('js_safety_findings')
+            .update({ after_photo_path: null, followed_at: null, follow_comment: null })
+            .eq('id', id);
+          if (error) throw error;
+          await loadFindings(currentLocation);
+        } catch (err) {
+          alert('取消失敗: ' + (err.message || err));
+        }
+      });
+    }
     return card;
   }
 
