@@ -63,6 +63,7 @@
 
   /* フォロー: 指摘カード */
   .finding-card {
+    position: relative;
     display: flex; gap: 12px; padding: 12px; margin-bottom: 8px;
     background: #fff; border: 2px solid #ddd; border-radius: 10px; cursor: pointer;
     transition: border-color 0.15s;
@@ -80,11 +81,13 @@
   .finding-date { font-size: 11px; color: #999; margin-top: 2px; }
   .finding-done-badge { font-size: 11px; color: #2e7d32; font-weight: 600; }
   /* done カードは pointer-events:none だが、このボタンだけは押せるように auto に戻す。
-     色は明確にして「押せる」と分かるようにする */
+     親カードの右下に絶対配置（フォロー済みバッジと並ぶと見づらいので分離）。 */
   .finding-reset-btn {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
     pointer-events: auto;
-    margin-left: 8px;
-    padding: 3px 10px;
+    padding: 4px 12px;
     font-size: 11px;
     border: 1px solid #d32f2f;
     border-radius: 4px;
@@ -390,8 +393,9 @@
       <div class="finding-info">
         <div class="finding-workplace">${esc(f.workplace_name)}</div>
         <div class="finding-comment">${esc(f.comment || '')}</div>
-        <div class="finding-date">${f.patrol_date}${isDone ? ` <span class="finding-done-badge">✓ フォロー済み</span><button class="finding-reset-btn" data-reset-id="${f.id}" title="対象違いの写真をアップした時の取消">↺ 取消</button>` : ''}</div>
+        <div class="finding-date">${f.patrol_date}${isDone ? ' <span class="finding-done-badge">✓ フォロー済み</span>' : ''}</div>
       </div>
+      ${isDone ? `<button class="finding-reset-btn" data-reset-id="${f.id}" title="対象違いの写真をアップした時の取消">↺ 取消</button>` : ''}
     `;
     if (!isDone) card.addEventListener('click', () => selectFinding(f));
     // done カードの「↺ 取消」ボタン
