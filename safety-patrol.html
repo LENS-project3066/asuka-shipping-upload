@@ -331,6 +331,7 @@
 <div class="queue-banner hidden" id="queueBanner">
   <div class="qb-spin hidden" id="qbSpin"></div>
   <div class="qb-text" id="qbText"></div>
+  <button class="qb-retry hidden" id="qbDiscard">破棄</button>
   <button class="qb-retry hidden" id="qbRetry">今すぐ再送</button>
 </div>
 
@@ -354,6 +355,7 @@
   const qbSpin = document.getElementById('qbSpin');
   const qbText = document.getElementById('qbText');
   const qbRetry = document.getElementById('qbRetry');
+  const qbDiscard = document.getElementById('qbDiscard');
 
   // フォロータブDOM
   const followMonthInput = document.getElementById('followMonthInput');
@@ -452,7 +454,8 @@
 
     // 送信待ちキュー: 起動時に未送信分を復元して drain 開始。
     // online 復帰・定期(15s)・「今すぐ再送」でも drain を蹴る。
-    qbRetry.addEventListener('click', () => { queueItems.forEach(i => i.retryCount = 0); drainQueue(); });
+    qbRetry.addEventListener('click', retryFailed);
+    qbDiscard.addEventListener('click', discardFailed);
     window.addEventListener('online', () => { renderQueueBanner(); drainQueue(); });
     window.addEventListener('offline', renderQueueBanner);
     setInterval(drainQueue, 15000);
@@ -555,7 +558,7 @@
       <div class="finding-info">
         <div class="finding-workplace">${esc(f.workplace_name)}</div>
         <div class="finding-comment">${esc(f.comment || '')}</div>
-        <div class="finding-date">${f.patrol_date}${isDone ? (f._pendingFollow ? ' <span class="finding-pending-badge">⏳ 送信待ち</span>' : ' <span class="finding-done-badge">✓ フォロー済み</span>') : ''}</div>
+        <div class="finding-date">${esc(f.patrol_date)}${isDone ? (f._pendingFollow ? ' <span class="finding-pending-badge">⏳ 送信待ち</span>' : ' <span class="finding-done-badge">✓ フォロー済み</span>') : ''}</div>
       </div>
       ${isDone ? `<button class="finding-reset-btn" data-reset-id="${f.id}" title="${f._pendingFollow ? '送信待ちのフォローを取り消す' : '対象違いの写真をアップした時の取消'}">↺ 取消</button>` : ''}
     `;
@@ -576,7 +579,7 @@
         if (f._pendingFollow) {
           if (!confirm('送信待ちのフォローを取り消して撮り直しますか？')) return;
           const items = queueItems.filter(i => i.type === 'follow' && i.finding_id === id);
-          for (const i of items) await idbDelete(i.id);
+          for (const i of items) await discardItem(i); // アップ済みなら Storage も掃除
           await refreshQueueMirror();
           renderFindingList();
           return;
@@ -608,7 +611,7 @@
       <div class="photo-view-dialog">
         <button class="photo-view-close" aria-label="閉じる">✕</button>
         <div class="photo-view-title">${esc(f.workplace_name || '')}</div>
-        <div class="photo-view-date">${f.patrol_date}</div>
+        <div class="photo-view-date">${esc(f.patrol_date)}</div>
         <div class="photo-view-comment">${esc(f.comment || '')}</div>
         <div class="photo-view-label">📷 Before</div>
         <img class="photo-view-img" src="${f.before_url || ''}" alt="before">
@@ -750,6 +753,7 @@
 
   const QUEUE_DB = 'safetyPatrolQueue';
   const QUEUE_STORE = 'uploads';
+  const MAX_RETRY = 5; // これを超えたら「送信できない」失敗確定。自動再試行を止め人手(再送/破棄)に委ねる
   let _qdb = null;
 
   function openQueueDB() {
@@ -787,13 +791,14 @@
     return `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  // フォームから1件キューに積む。storagePath は積む瞬間に確定(リトライで二重発番しない)。
+  // フォームから1件キューに積む。storagePath は item の UUID から決定論的に作る
+  // (リトライで二重発番しない + アイテム間で衝突しない=upsert で別写真を上書きしない)。
   async function enqueueUpload(payload) {
-    const rand = Math.random().toString(36).slice(2, 6);
+    const id = genId();
     const item = {
-      id: genId(),
+      id,
       createdAt: new Date().toISOString(),
-      storagePath: `${FOLDER}/${Date.now()}_${rand}.${payload.ext}`,
+      storagePath: `${FOLDER}/${id}.${payload.ext}`,
       storageUploaded: false,
       retryCount: 0,
       lastError: null,
@@ -811,26 +816,28 @@
   }
 
   // 古い順に1件ずつ処理。失敗は retryCount++ で残し、次の item へ進む(毒入り1件で
-  // 全体を止めない)。1パスで失敗が出たらバックオフ後に再試行。
+  // 全体を止めない)。MAX_RETRY 到達分はもう叩かず(失敗確定)、人手の再送/破棄を待つ。
+  // まだ再試行余地のある失敗が出たらバックオフ後に再試行。
   async function drainQueue() {
     if (draining || !navigator.onLine) { renderQueueBanner(); return; }
     draining = true;
     renderQueueBanner();
-    let hadError = false;
+    let willRetry = false;
     let followDone = false;
     try {
       const items = (await idbGetAll() || []).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
       for (const item of items) {
+        if ((item.retryCount || 0) >= MAX_RETRY) continue; // 失敗確定は素通り
         try {
           await processQueueItem(item);
           await idbDelete(item.id);
           markUploaded(item);
           if (item.type === 'follow') followDone = true;
         } catch (err) {
-          hadError = true;
           item.retryCount = (item.retryCount || 0) + 1;
           item.lastError = err && err.message ? err.message : String(err);
           await idbPut(item);
+          if (item.retryCount < MAX_RETRY) willRetry = true; // まだ再試行する
         }
         await refreshQueueMirror();
       }
@@ -840,7 +847,7 @@
     renderQueueBanner();
     // 送信完了でフォローカードのバッジ(⏳送信待ち→✓フォロー済み)を更新
     if (followDone && findings.length) renderFindingList();
-    if (hadError) scheduleRetry();
+    if (willRetry) scheduleRetry();
   }
 
   // drain 成功後、メモリ上の findings も確定状態へ寄せる。これをやらないと
@@ -879,11 +886,13 @@
         if (error) throw error;
       }
     } else {
+      // 先勝ち: 既に After がある行には書かない(二重フォローの後勝ち上書き防止)。
+      // 却下済み(dismissed_at)にも書かない。0 行一致でも error にはならず冪等に成功扱い。
       const { error } = await supabase.from('js_safety_findings').update({
         after_photo_path: item.storagePath,
         follow_comment: null,
         followed_at: new Date().toISOString(),
-      }).eq('id', item.finding_id);
+      }).eq('id', item.finding_id).is('after_photo_path', null).is('dismissed_at', null);
       if (error) throw error;
     }
   }
@@ -897,19 +906,54 @@
     const n = queueItems.length;
     if (n === 0) { queueBanner.classList.add('hidden'); return; }
     queueBanner.classList.remove('hidden');
-    const errored = queueItems.filter(i => (i.retryCount || 0) > 0).length;
-    queueBanner.classList.toggle('offline', !navigator.onLine);
-    queueBanner.classList.toggle('error', navigator.onLine && errored > 0);
+    const failed = queueItems.filter(i => (i.retryCount || 0) >= MAX_RETRY).length;
+    const pending = n - failed;
+    const retrying = queueItems.some(i => { const r = i.retryCount || 0; return r > 0 && r < MAX_RETRY; });
+
+    queueBanner.classList.toggle('offline', !navigator.onLine && failed === 0);
+    queueBanner.classList.toggle('error', failed > 0 || (navigator.onLine && retrying));
 
     let text;
-    if (!navigator.onLine) text = `📴 オフライン — 送信待ち ${n}件（接続後に自動送信）`;
+    if (failed > 0) text = `✕ 送信できない ${failed}件${pending ? ` / 送信待ち ${pending}件` : ''}`;
+    else if (!navigator.onLine) text = `📴 オフライン — 送信待ち ${n}件（接続後に自動送信）`;
     else if (draining) text = `📤 送信中… 残り ${n}件`;
-    else if (errored > 0) text = `⚠️ 送信待ち ${n}件（自動で再送します）`;
+    else if (retrying) text = `⚠️ 送信待ち ${n}件（自動で再送します）`;
     else text = `📤 送信待ち ${n}件`;
     qbText.textContent = text;
 
     qbSpin.classList.toggle('hidden', !(draining && navigator.onLine));
-    qbRetry.classList.toggle('hidden', !(navigator.onLine && errored > 0 && !draining));
+    // 再送: オンラインで(失敗 or リトライ中)かつ drain 停止中。破棄: 失敗確定がある時だけ。
+    qbRetry.classList.toggle('hidden', !(navigator.onLine && (failed > 0 || retrying) && !draining));
+    qbDiscard.classList.toggle('hidden', failed === 0);
+  }
+
+  // 1件破棄。アップロード済みなら Storage の孤児ファイルを best-effort で掃除する。
+  async function discardItem(item) {
+    if (item.storageUploaded) {
+      try { await supabase.storage.from(BUCKET).remove([item.storagePath]); } catch (e) { /* best-effort */ }
+    }
+    await idbDelete(item.id);
+  }
+
+  // 「今すぐ再送」: 失敗/リトライ中の retryCount を 0 に戻して(IDBにも反映)再 drain。
+  async function retryFailed() {
+    const items = await idbGetAll() || [];
+    for (const it of items) {
+      if ((it.retryCount || 0) > 0) { it.retryCount = 0; it.lastError = null; await idbPut(it); }
+    }
+    await refreshQueueMirror();
+    drainQueue();
+  }
+
+  // 「破棄」: 送信できない確定分を Storage 掃除つきで捨てる。
+  async function discardFailed() {
+    const items = (await idbGetAll() || []).filter(i => (i.retryCount || 0) >= MAX_RETRY);
+    if (!items.length) return;
+    const detail = items.slice(0, 3).map(i => '・' + (i.lastError || '不明なエラー')).join('\n');
+    if (!confirm(`送信できない ${items.length}件を破棄しますか？\n${detail}\n\n破棄すると、この写真は送信されません。`)) return;
+    for (const it of items) await discardItem(it);
+    await refreshQueueMirror();
+    if (findings.length) renderFindingList();
   }
 
   // フォローが未送信(キュー滞留)の finding id 集合。フォロー一覧で楽観的に
