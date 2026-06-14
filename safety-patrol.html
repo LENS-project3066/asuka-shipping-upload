@@ -5,139 +5,233 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>5S安全パトロール</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; background: #f5f5f5; color: #333; min-height: 100vh; }
-  .container { max-width: 440px; margin: 0 auto; padding: 16px; }
-  h1 { font-size: 18px; text-align: center; margin-bottom: 4px; font-weight: 600; }
-  .subtitle { text-align: center; color: #888; font-size: 13px; margin-bottom: 20px; }
+  /* ── デザイントークン（抑制的モダン: 太字回避=weight≤500 / 角丸控えめ=4px中心） ── */
+  :root {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --ink: #1d2128;
+    --muted: #6c727c;
+    --faint: #9aa0aa;
+    --line: #e7e8ec;
+    --line-2: #dcdee3;
+    --accent: #4b5bd0;          /* 新規系の落ち着いたインディゴ */
+    --accent-ink: #3f4cb5;
+    --accent-weak: #eef0fb;
+    --accent-line: #d6daf3;
+    --violet: #7558b8;          /* フォロー系のミュートしたバイオレット */
+    --violet-weak: #f2edf8;
+    --danger: #d64545;
+    --danger-weak: #fbecec;
+    --danger-line: #ecc4c4;
+    --ok: #2f9e5f;
+    --ok-weak: #e8f5ee;
+    --amber: #c2680f;
+    --r: 4px;                   /* コントロール標準 */
+    --r-card: 6px;              /* カード・面 */
+    --shadow-sm: 0 1px 2px rgba(20,22,28,0.08);
+    --shadow-pop: 0 6px 22px rgba(15,17,22,0.20);
+  }
 
-  .form-group { margin-bottom: 14px; }
-  .form-label { display: block; font-size: 13px; font-weight: 600; color: #555; margin-bottom: 6px; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--ink); min-height: 100vh;
+    line-height: 1.5; letter-spacing: -0.003em;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .container { max-width: 440px; margin: 0 auto; padding: 20px 16px 16px; }
+  h1 { font-size: 19px; text-align: center; margin-bottom: 3px; font-weight: 500; letter-spacing: -0.01em; }
+  .subtitle { text-align: center; color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+
+  .form-group { margin-bottom: 16px; }
+  .form-label { display: block; font-size: 12.5px; font-weight: 500; color: var(--muted); margin-bottom: 7px; letter-spacing: 0.01em; }
   .form-select,
   .form-textarea,
-  .form-input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; background: #fff; font-family: inherit; }
-  .form-textarea { min-height: 80px; resize: vertical; }
-  .form-select:focus, .form-textarea:focus, .form-input:focus { outline: none; border-color: #1976d2; }
+  .form-input {
+    width: 100%; padding: 11px 12px; border: 1px solid var(--line-2); border-radius: var(--r);
+    font-size: 15px; background: var(--surface); color: var(--ink); font-family: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .form-textarea { min-height: 84px; resize: vertical; }
+  .form-input::placeholder, .form-textarea::placeholder { color: var(--faint); }
+  .form-select:focus, .form-textarea:focus, .form-input:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak);
+  }
 
-  .btn { padding: 14px 8px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; text-align: center; }
-  .btn-camera { flex: 1; background: #1976d2; color: #fff; }
-  .btn-camera:active { background: #1565c0; }
-  .btn-gallery { flex: 1; background: #fff; color: #1976d2; border: 2px solid #1976d2; }
-  .btn-gallery:active { background: #e3f2fd; }
+  .btn {
+    padding: 12px 8px; border: none; border-radius: var(--r); font-size: 15px;
+    font-weight: 500; cursor: pointer; text-align: center;
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  }
+  .btn-camera { flex: 1; background: var(--accent); color: #fff; }
+  .btn-camera:active { background: var(--accent-ink); }
+  .btn-gallery { flex: 1; background: var(--surface); color: var(--accent); border: 1px solid var(--accent-line); }
+  .btn-gallery:active { background: var(--accent-weak); }
   input[type="file"] { display: none; }
 
   .photo-btn-row { display: flex; gap: 10px; margin-bottom: 10px; }
-  .photo-preview { width: 100%; aspect-ratio: 4/3; border: 2px dashed #ddd; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 13px; overflow: hidden; position: relative; background: #fafafa; }
+  .photo-preview {
+    width: 100%; aspect-ratio: 4/3; border: 1px dashed var(--line-2); border-radius: var(--r-card);
+    display: flex; align-items: center; justify-content: center; color: var(--faint);
+    font-size: 13px; overflow: hidden; position: relative; background: #fbfbfc;
+  }
   .photo-preview img { width: 100%; height: 100%; object-fit: cover; }
-  .photo-remove { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; background: rgba(0,0,0,0.7); color: #fff; border: none; border-radius: 50%; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .photo-remove {
+    position: absolute; top: 8px; right: 8px; width: 32px; height: 32px;
+    background: rgba(20,22,28,0.62); color: #fff; border: none; border-radius: 50%;
+    font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+  }
 
-  .btn-send { display: block; width: 100%; padding: 16px; background: #4caf50; color: #fff; border: none; border-radius: 8px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 8px; }
-  .btn-send:active { background: #388e3c; }
-  .btn-send:disabled { background: #bbb; cursor: not-allowed; }
+  .btn-send {
+    display: block; width: 100%; padding: 14px; background: var(--ink); color: #fff;
+    border: none; border-radius: var(--r); font-size: 15px; font-weight: 500;
+    letter-spacing: 0.01em; cursor: pointer; margin-top: 10px; transition: background 0.15s;
+  }
+  .btn-send:active { background: #2c313d; }
+  .btn-send:disabled { background: #cdd0d6; color: #fff; cursor: not-allowed; }
 
-  .status { text-align: center; padding: 12px; font-size: 14px; border-radius: 6px; margin-bottom: 12px; }
-  .status-success { background: #e8f5e9; color: #2e7d32; }
-  .status-error { background: #ffebee; color: #e53935; }
-  .status-uploading { background: #e3f2fd; color: #1976d2; }
+  .status { text-align: center; padding: 11px; font-size: 13.5px; font-weight: 500; border-radius: var(--r); margin-bottom: 12px; }
+  .status-success { background: var(--ok-weak); color: var(--ok); }
+  .status-error { background: var(--danger-weak); color: var(--danger); }
+  .status-uploading { background: var(--accent-weak); color: var(--accent); }
   .hidden { display: none; }
 
-  .counter { text-align: center; color: #888; font-size: 13px; margin: 8px 0; }
+  .counter { text-align: center; color: var(--muted); font-size: 13px; margin: 10px 0 0; }
 
-  .location-chip { display: inline-block; padding: 4px 12px; background: #e3f2fd; color: #1976d2; border-radius: 12px; font-size: 12px; font-weight: 600; margin-bottom: 10px; }
-  .location-change { text-decoration: underline; color: #1976d2; font-size: 12px; cursor: pointer; margin-left: 8px; }
+  .location-chip { display: inline-block; padding: 4px 10px; background: var(--accent-weak); color: var(--accent); border-radius: var(--r); font-size: 12px; font-weight: 500; }
+  .location-change { color: var(--muted); font-size: 12px; cursor: pointer; margin-left: 10px; text-decoration: underline; text-underline-offset: 2px; }
+  .location-change:active { color: var(--accent); }
 
-  /* タブ */
+  /* タブ（セグメンテッドコントロール） */
   .tab-bar {
-    display: flex; gap: 0; margin-bottom: 16px; border-radius: 10px; overflow: hidden;
-    border: 2px solid #1976d2;
+    display: flex; gap: 3px; margin-bottom: 18px; border-radius: var(--r-card);
+    background: #ebedf0; padding: 3px;
   }
   .tab-btn {
-    flex: 1; padding: 12px 0; border: none; font-size: 14px; font-weight: 700;
-    cursor: pointer; text-align: center; transition: all 0.15s;
-    background: #fff; color: #1976d2;
+    flex: 1; padding: 9px 0; border: none; font-size: 14px; font-weight: 500;
+    cursor: pointer; text-align: center; transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+    background: transparent; color: var(--muted); border-radius: var(--r);
   }
-  .tab-btn.active { background: #1976d2; color: #fff; }
-  .tab-btn:not(.active):active { background: #e3f2fd; }
+  .tab-btn.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+  .tab-btn:not(.active):active { color: var(--ink); }
   .tab-content { display: none; }
   .tab-content.active { display: block; }
 
-  /* フォロー: 指摘カード */
+  /* フォロー: 指摘カード（状態間で枠を 1px 固定しレイアウトを揺らさない） */
   .finding-card {
     position: relative;
     display: flex; gap: 12px; padding: 12px; margin-bottom: 8px;
-    background: #fff; border: 2px solid #ddd; border-radius: 10px; cursor: pointer;
-    transition: border-color 0.15s;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
   }
-  .finding-card:active { background: #f0f0f0; }
-  .finding-card.selected { border-color: #7b1fa2; background: #f3e5f9; }
+  .finding-card:active { background: #f6f7f9; }
+  .finding-card.selected { border-color: var(--violet); background: var(--violet-weak); box-shadow: 0 0 0 1px var(--violet); }
   /* 完了カード: 閲覧は可能（タップで Before/After を確認できる）。
      色の薄化で完了状態を視覚的に表現。 */
-  .finding-card.done { border-color: #ddd; background: #fafafa; color: #bbb; }
+  .finding-card.done { border-color: var(--line); background: #f8f9fa; }
   .finding-card.done .finding-thumb { opacity: 0.5; }
-  .finding-card.done .finding-comment { color: #aaa; }
-  .finding-thumb { width: 80px; height: 60px; border-radius: 6px; object-fit: cover; background: #eee; flex-shrink: 0; }
+  .finding-card.done .finding-comment { color: var(--faint); }
+  .finding-card.done .finding-workplace { color: #a99bc7; }
+  .finding-thumb { width: 80px; height: 60px; border-radius: var(--r); object-fit: cover; background: #eef0f2; flex-shrink: 0; }
   .finding-info { flex: 1; min-width: 0; }
-  .finding-workplace { font-size: 12px; font-weight: 600; color: #7b1fa2; margin-bottom: 2px; }
-  .finding-comment { font-size: 13px; color: #555; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .finding-date { font-size: 11px; color: #999; margin-top: 2px; }
-  .finding-done-badge { font-size: 11px; color: #2e7d32; font-weight: 600; }
+  .finding-workplace { font-size: 12px; font-weight: 500; color: var(--violet); margin-bottom: 3px; }
+  .finding-comment { font-size: 13px; color: #4b5159; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .finding-date { font-size: 11px; color: var(--faint); margin-top: 3px; }
+  .finding-done-badge { font-size: 11px; color: var(--ok); font-weight: 500; }
   /* 取消ボタン: カード右下に絶対配置。カードクリック(閲覧)と区別しやすく赤系で。 */
   .finding-reset-btn {
     position: absolute;
     bottom: 8px;
     right: 8px;
-    padding: 4px 12px;
+    padding: 4px 10px;
     font-size: 11px;
-    border: 1px solid #d32f2f;
-    border-radius: 4px;
-    background: #fff;
-    color: #d32f2f;
+    border: 1px solid var(--danger-line);
+    border-radius: var(--r);
+    background: var(--surface);
+    color: var(--danger);
     cursor: pointer;
-    font-weight: 600;
+    font-weight: 500;
   }
-  .finding-reset-btn:active { background: #ffebee; }
+  .finding-reset-btn:active { background: var(--danger-weak); }
 
   /* Before/After 閲覧オーバーレイ */
   .photo-view-overlay {
     position: fixed; inset: 0;
-    background: rgba(0, 0, 0, 0.85);
+    background: rgba(15, 17, 22, 0.66);
+    -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
     z-index: 1000;
     display: flex; align-items: flex-start; justify-content: center;
     padding: 20px 12px;
     overflow-y: auto;
   }
   .photo-view-dialog {
-    background: #fff;
-    border-radius: 12px;
+    background: var(--surface);
+    border-radius: var(--r-card);
     padding: 16px 16px 20px;
     max-width: 440px;
     width: 100%;
     position: relative;
+    box-shadow: var(--shadow-pop);
   }
   .photo-view-close {
     position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 36px;
-    height: 36px;
+    top: 10px;
+    right: 10px;
+    width: 34px;
+    height: 34px;
     border: none;
     border-radius: 50%;
-    background: #eee;
-    font-size: 18px;
+    background: #eef0f2;
+    color: var(--muted);
+    font-size: 17px;
     cursor: pointer;
     line-height: 1;
   }
-  .photo-view-close:active { background: #ccc; }
-  .photo-view-title { font-size: 14px; font-weight: 600; color: #7b1fa2; padding-right: 40px; }
-  .photo-view-date { font-size: 11px; color: #999; margin-top: 2px; }
-  .photo-view-comment { font-size: 13px; color: #555; margin-top: 8px; white-space: pre-wrap; }
-  .photo-view-label { font-size: 12px; font-weight: 600; color: #555; margin: 14px 0 6px; }
-  .photo-view-img { width: 100%; border-radius: 8px; display: block; }
-  .empty-msg { text-align: center; color: #999; font-size: 14px; padding: 40px 0; }
+  .photo-view-close:active { background: #dfe2e6; }
+  .photo-view-title { font-size: 14px; font-weight: 500; color: var(--violet); padding-right: 40px; }
+  .photo-view-date { font-size: 11px; color: var(--faint); margin-top: 2px; }
+  .photo-view-comment { font-size: 13px; color: #4b5159; margin-top: 8px; white-space: pre-wrap; }
+  .photo-view-label { font-size: 12px; font-weight: 500; color: var(--muted); margin: 14px 0 6px; }
+  .photo-view-img { width: 100%; border-radius: var(--r); display: block; }
+  .empty-msg { text-align: center; color: var(--faint); font-size: 14px; padding: 40px 0; }
 
-  .follow-form { border-top: 2px solid #7b1fa2; padding-top: 16px; margin-top: 8px; }
-  .before-label { font-size: 12px; color: #999; margin-bottom: 4px; }
-  .before-photo { width: 100%; border-radius: 8px; margin-bottom: 12px; }
+  .follow-form { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 10px; }
+  .before-label { font-size: 12px; color: var(--muted); font-weight: 500; margin-bottom: 5px; }
+  .before-photo { width: 100%; border-radius: var(--r-card); margin-bottom: 14px; }
+
+  /* 送信待ちキュー バナー (画面下部固定)。
+     楽観 write-behind: 撮影は即フォームをクリアし、裏で直列アップロード。
+     その進捗をここに表示する。pending=0 で自動的に隠れる。 */
+  .queue-banner {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 14px; width: calc(100% - 24px); max-width: 416px;
+    background: #23262e; color: #fff; border-radius: var(--r-card);
+    padding: 11px 14px; font-size: 13px; font-weight: 500;
+    display: flex; align-items: center; gap: 10px;
+    box-shadow: var(--shadow-pop); z-index: 900;
+  }
+  .queue-banner.hidden { display: none; }
+  .queue-banner.error { background: #b23b3b; }
+  .queue-banner.offline { background: #5a5048; }
+  .qb-text { flex: 1; min-width: 0; }
+  .qb-spin {
+    width: 15px; height: 15px; flex-shrink: 0;
+    border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff;
+    border-radius: 50%; animation: qbspin 0.8s linear infinite;
+  }
+  .qb-spin.hidden { display: none; }
+  @keyframes qbspin { to { transform: rotate(360deg); } }
+  .qb-retry {
+    flex-shrink: 0; padding: 5px 12px; border: 1px solid rgba(255,255,255,0.55);
+    border-radius: var(--r); background: transparent; color: #fff;
+    font-size: 12px; font-weight: 500; cursor: pointer;
+  }
+  .qb-retry:active { background: rgba(255,255,255,0.15); }
+  .qb-retry.hidden { display: none; }
+
+  /* フォロー: 送信待ち(楽観完了)カード。✓フォロー済みとは別の淡色で区別。 */
+  .finding-pending-badge { font-size: 11px; color: var(--amber); font-weight: 500; }
 </style>
 </head>
 <body>
@@ -184,7 +278,7 @@
         <img class="before-photo" id="beforePhoto" src="" alt="before">
 
         <div class="photo-area">
-          <label class="form-label">After写真 <span style="color:#e53935;">*</span></label>
+          <label class="form-label">After写真 <span style="color:var(--danger);">*</span></label>
           <div class="photo-btn-row">
             <button class="btn btn-camera" id="followCameraBtn">📷 撮影</button>
             <button class="btn btn-gallery" id="followGalleryBtn">🖼 写真を選ぶ</button>
@@ -204,19 +298,19 @@
     <!-- ============================== -->
     <div class="tab-content" id="tabNew">
       <div class="form-group">
-        <label class="form-label">職場 <span style="color:#e53935;">*</span></label>
+        <label class="form-label">職場 <span style="color:var(--danger);">*</span></label>
         <select class="form-select" id="workplaceSelect">
           <option value="">-- 選択してください --</option>
         </select>
       </div>
 
       <div class="form-group">
-        <label class="form-label">指摘内容 <span style="color:#e53935;">*</span></label>
+        <label class="form-label">指摘内容 <span style="color:var(--danger);">*</span></label>
         <textarea class="form-textarea" id="commentInput" placeholder="例: 通路に段ボールが積み上げられている"></textarea>
       </div>
 
       <div class="photo-area">
-        <label class="form-label">写真 <span style="color:#e53935;">*</span></label>
+        <label class="form-label">写真 <span style="color:var(--danger);">*</span></label>
         <div class="photo-btn-row">
           <button class="btn btn-camera" id="newCameraBtn">📷 撮影</button>
           <button class="btn btn-gallery" id="newGalleryBtn">🖼 写真を選ぶ</button>
@@ -233,6 +327,13 @@
   </div>
 </div>
 
+<!-- 送信待ちキュー バナー (画面下部固定・pending>0 のとき表示) -->
+<div class="queue-banner hidden" id="queueBanner">
+  <div class="qb-spin hidden" id="qbSpin"></div>
+  <div class="qb-text" id="qbText"></div>
+  <button class="qb-retry hidden" id="qbRetry">今すぐ再送</button>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 (function() {
@@ -247,6 +348,12 @@
   const mainScreen = document.getElementById('mainScreen');
   const locationChip = document.getElementById('locationChip');
   const changeLocationBtn = document.getElementById('changeLocationBtn');
+
+  // 送信待ちキュー バナーDOM
+  const queueBanner = document.getElementById('queueBanner');
+  const qbSpin = document.getElementById('qbSpin');
+  const qbText = document.getElementById('qbText');
+  const qbRetry = document.getElementById('qbRetry');
 
   // フォロータブDOM
   const followMonthInput = document.getElementById('followMonthInput');
@@ -280,6 +387,11 @@
   let followFile = null;
   let newFile = null;
   let totalSubmitted = 0;
+
+  // 送信待ちキュー (IndexedDB 永続 + メモリミラー)
+  let queueItems = [];   // IndexedDB の現在内容のミラー (バナー/フォロー楽観表示に使用)
+  let draining = false;  // drain ループの二重起動防止
+  let retryTimer = null; // 失敗後のバックオフ再試行タイマー
 
   init();
 
@@ -337,6 +449,14 @@
     });
     commentInput.addEventListener('input', updateNewSendBtn);
     newSendBtn.addEventListener('click', submitNew);
+
+    // 送信待ちキュー: 起動時に未送信分を復元して drain 開始。
+    // online 復帰・定期(15s)・「今すぐ再送」でも drain を蹴る。
+    qbRetry.addEventListener('click', () => { queueItems.forEach(i => i.retryCount = 0); drainQueue(); });
+    window.addEventListener('online', () => { renderQueueBanner(); drainQueue(); });
+    window.addEventListener('offline', renderQueueBanner);
+    setInterval(drainQueue, 15000);
+    refreshQueueMirror().then(drainQueue);
   }
 
   async function showMain(location) {
@@ -401,6 +521,12 @@
   }
 
   function renderFindingList() {
+    // 未送信(キュー滞留)のフォローも完了扱いにする(二重フォロー防止 + 楽観表示)
+    const pending = pendingFollowIds();
+    findings.forEach(f => {
+      f._pendingFollow = pending.has(f.id) && !f.after_photo_path;
+      f.isDone = !!f.after_photo_path || f._pendingFollow;
+    });
     const undone = findings.filter(f => !f.isDone);
     const done = findings.filter(f => f.isDone);
 
@@ -429,9 +555,9 @@
       <div class="finding-info">
         <div class="finding-workplace">${esc(f.workplace_name)}</div>
         <div class="finding-comment">${esc(f.comment || '')}</div>
-        <div class="finding-date">${f.patrol_date}${isDone ? ' <span class="finding-done-badge">✓ フォロー済み</span>' : ''}</div>
+        <div class="finding-date">${f.patrol_date}${isDone ? (f._pendingFollow ? ' <span class="finding-pending-badge">⏳ 送信待ち</span>' : ' <span class="finding-done-badge">✓ フォロー済み</span>') : ''}</div>
       </div>
-      ${isDone ? `<button class="finding-reset-btn" data-reset-id="${f.id}" title="対象違いの写真をアップした時の取消">↺ 取消</button>` : ''}
+      ${isDone ? `<button class="finding-reset-btn" data-reset-id="${f.id}" title="${f._pendingFollow ? '送信待ちのフォローを取り消す' : '対象違いの写真をアップした時の取消'}">↺ 取消</button>` : ''}
     `;
     // カードクリック: 未完了 → 選択してフォロー画面へ / 完了 → Before/After 閲覧
     card.addEventListener('click', () => {
@@ -445,6 +571,17 @@
         e.stopPropagation();
         const id = Number(resetBtn.dataset.resetId);
         if (!id) return;
+
+        // 送信待ち(まだアップロードされていない)フォローはキューから取り消すだけ
+        if (f._pendingFollow) {
+          if (!confirm('送信待ちのフォローを取り消して撮り直しますか？')) return;
+          const items = queueItems.filter(i => i.type === 'follow' && i.finding_id === id);
+          for (const i of items) await idbDelete(i.id);
+          await refreshQueueMirror();
+          renderFindingList();
+          return;
+        }
+
         if (!confirm('このAfter写真を取り消して撮り直しますか？\n（対象違いの写真をアップしてしまった時の救済用）')) return;
         try {
           const { error } = await supabase
@@ -509,39 +646,35 @@
     followSendBtn.disabled = !(selectedFindingId && followFile);
   }
 
+  // 楽観 write-behind: アップロード完了を待たず即キューに積み、フォロー画面を閉じる。
+  // 実アップロード(Storage→DB update)は drainQueue が裏で直列実行する。
   async function submitFollow() {
     if (!selectedFindingId || !followFile) return;
-    followSendBtn.disabled = true;
-    showStatusEl(followStatus, '送信中...', 'uploading');
+    const findingId = selectedFindingId;
+    const f = findings.find(x => x.id === findingId);
 
     try {
-      const ext = (followFile.name.split('.').pop() || 'jpg').toLowerCase();
-      const storagePath = `${FOLDER}/${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
-
-      const { error: upErr } = await supabase.storage.from(BUCKET).upload(storagePath, followFile, { contentType: followFile.type, upsert: false });
-      if (upErr) throw upErr;
-
-      const { error: updErr } = await supabase.from('js_safety_findings').update({
-        after_photo_path: storagePath,
-        follow_comment: null,
-        followed_at: new Date().toISOString()
-      }).eq('id', selectedFindingId);
-      if (updErr) throw updErr;
-
-      showStatusEl(followStatus, '✅ フォロー送信完了', 'success');
-      const f = findings.find(x => x.id === selectedFindingId);
-      if (f) f.isDone = true;
-      selectedFindingId = null;
-
-      setTimeout(() => {
-        followForm.classList.add('hidden');
-        renderFindingList();
-        followStatus.classList.add('hidden');
-      }, 1500);
-    } catch (err) {
-      showStatusEl(followStatus, `エラー: ${err.message || '送信失敗'}`, 'error');
-      followSendBtn.disabled = false;
+      await enqueueUpload({
+        type: 'follow',
+        finding_id: findingId,
+        workplace_name: f ? f.workplace_name : '',
+        comment: f ? f.comment : '',
+        blob: followFile,
+        contentType: followFile.type,
+        ext: (followFile.name.split('.').pop() || 'jpg').toLowerCase(),
+      });
+    } catch (e) {
+      showStatusEl(followStatus, '保存に失敗しました。もう一度お試しください', 'error');
+      return;
     }
+
+    // 楽観的に完了表示にして次のカードへ即進める
+    if (f) f.isDone = true;
+    selectedFindingId = null;
+    followFile = null;
+    followForm.classList.add('hidden');
+    followStatus.classList.add('hidden');
+    renderFindingList();
   }
 
   // ========================================
@@ -568,49 +701,221 @@
     newSendBtn.disabled = !(workplaceSelect.value && commentInput.value.trim() && newFile);
   }
 
+  // 楽観 write-behind: アップロード完了を待たず即キューに積み、フォームを空にして
+  // 次の撮影へ進める。実アップロード(Storage→DB insert)は drainQueue が裏で直列実行。
+  // patrol_date は「キューに積んだ瞬間」(=撮影時刻) で固定する。
   async function submitNew() {
-    if (!newFile) return;
-    newSendBtn.disabled = true;
-    showStatusEl(newStatus, '送信中...', 'uploading');
+    if (!newFile || !workplaceSelect.value || !commentInput.value.trim()) return;
+
+    const today = new Date();
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
     try {
-      const ext = (newFile.name.split('.').pop() || 'jpg').toLowerCase();
-      const storagePath = `${FOLDER}/${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
-
-      const { error: upErr } = await supabase.storage.from(BUCKET).upload(storagePath, newFile, { contentType: newFile.type, upsert: false });
-      if (upErr) throw upErr;
-
-      const today = new Date();
-      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-      const { error: insErr } = await supabase.from('js_safety_findings').insert({
-        patrol_date: dateStr,
+      await enqueueUpload({
+        type: 'new',
         location: currentLocation,
+        patrol_date: dateStr,
         workplace_id: parseInt(workplaceSelect.value, 10),
         comment: commentInput.value.trim(),
-        before_photo_path: storagePath,
-        created_by: 'mobile'
+        blob: newFile,
+        contentType: newFile.type,
+        ext: (newFile.name.split('.').pop() || 'jpg').toLowerCase(),
       });
-      if (insErr) throw insErr;
-
-      totalSubmitted++;
-      showStatusEl(newStatus, '✅ 送信完了', 'success');
-      newCounter.classList.remove('hidden');
-      newCounter.textContent = `本日の登録件数: ${totalSubmitted}件`;
-
-      setTimeout(() => {
-        commentInput.value = '';
-        newFile = null;
-        newCameraInput.value = '';
-        newGalleryInput.value = '';
-        newPhotoPreview.innerHTML = '写真を撮影または選択';
-        updateNewSendBtn();
-        newStatus.classList.add('hidden');
-      }, 1500);
-    } catch (err) {
-      showStatusEl(newStatus, `エラー: ${err.message || '送信失敗'}`, 'error');
-      newSendBtn.disabled = false;
+    } catch (e) {
+      showStatusEl(newStatus, '保存に失敗しました。もう一度お試しください', 'error');
+      return;
     }
+
+    totalSubmitted++;
+    newCounter.classList.remove('hidden');
+    newCounter.textContent = `本日の登録件数: ${totalSubmitted}件`;
+
+    // フォームを即クリア(職場は連続入力のため残す)
+    commentInput.value = '';
+    newFile = null;
+    newCameraInput.value = '';
+    newGalleryInput.value = '';
+    newPhotoPreview.innerHTML = '写真を撮影または選択';
+    newStatus.classList.add('hidden');
+    updateNewSendBtn();
+  }
+
+  // ========================================
+  // 送信待ちキュー (IndexedDB 永続 + 直列 drain)
+  // ========================================
+  // 通信が悪くても撮影を妨げないための楽観 write-behind。送信ボタンで写真Blobと
+  // メタを IndexedDB に積み(=永続)、フォームを即解放。裏で drainQueue が古い順に
+  // 1件ずつ Storage アップロード→DB 書込み→キュー削除。ページを閉じても未送信分は
+  // 残り、次回起動時に自動で送信再開する。
+
+  const QUEUE_DB = 'safetyPatrolQueue';
+  const QUEUE_STORE = 'uploads';
+  let _qdb = null;
+
+  function openQueueDB() {
+    if (_qdb) return Promise.resolve(_qdb);
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(QUEUE_DB, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(QUEUE_STORE)) db.createObjectStore(QUEUE_STORE, { keyPath: 'id' });
+      };
+      req.onsuccess = () => { _qdb = req.result; resolve(_qdb); };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  function idbTx(mode, fn) {
+    return openQueueDB().then(db => new Promise((resolve, reject) => {
+      const tx = db.transaction(QUEUE_STORE, mode);
+      const store = tx.objectStore(QUEUE_STORE);
+      let result;
+      const r = fn(store);
+      if (r) r.onsuccess = () => { result = r.result; };
+      tx.oncomplete = () => resolve(result);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    }));
+  }
+
+  const idbPut = (item) => idbTx('readwrite', s => s.put(item));
+  const idbDelete = (id) => idbTx('readwrite', s => s.delete(id));
+  const idbGetAll = () => idbTx('readonly', s => s.getAll());
+
+  function genId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  // フォームから1件キューに積む。storagePath は積む瞬間に確定(リトライで二重発番しない)。
+  async function enqueueUpload(payload) {
+    const rand = Math.random().toString(36).slice(2, 6);
+    const item = {
+      id: genId(),
+      createdAt: new Date().toISOString(),
+      storagePath: `${FOLDER}/${Date.now()}_${rand}.${payload.ext}`,
+      storageUploaded: false,
+      retryCount: 0,
+      lastError: null,
+      ...payload,
+    };
+    await idbPut(item);
+    await refreshQueueMirror();
+    drainQueue();
+  }
+
+  async function refreshQueueMirror() {
+    try { queueItems = await idbGetAll() || []; }
+    catch (e) { queueItems = []; }
+    renderQueueBanner();
+  }
+
+  // 古い順に1件ずつ処理。失敗は retryCount++ で残し、次の item へ進む(毒入り1件で
+  // 全体を止めない)。1パスで失敗が出たらバックオフ後に再試行。
+  async function drainQueue() {
+    if (draining || !navigator.onLine) { renderQueueBanner(); return; }
+    draining = true;
+    renderQueueBanner();
+    let hadError = false;
+    let followDone = false;
+    try {
+      const items = (await idbGetAll() || []).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+      for (const item of items) {
+        try {
+          await processQueueItem(item);
+          await idbDelete(item.id);
+          markUploaded(item);
+          if (item.type === 'follow') followDone = true;
+        } catch (err) {
+          hadError = true;
+          item.retryCount = (item.retryCount || 0) + 1;
+          item.lastError = err && err.message ? err.message : String(err);
+          await idbPut(item);
+        }
+        await refreshQueueMirror();
+      }
+    } finally {
+      draining = false;
+    }
+    renderQueueBanner();
+    // 送信完了でフォローカードのバッジ(⏳送信待ち→✓フォロー済み)を更新
+    if (followDone && findings.length) renderFindingList();
+    if (hadError) scheduleRetry();
+  }
+
+  // drain 成功後、メモリ上の findings も確定状態へ寄せる。これをやらないと
+  // キューから消えた直後の再描画で after_photo_path=null に戻りカードが未完了化する。
+  function markUploaded(item) {
+    if (item.type !== 'follow') return;
+    const f = findings.find(x => x.id === item.finding_id);
+    if (f) { f.after_photo_path = item.storagePath; f.isDone = true; f._pendingFollow = false; }
+  }
+
+  async function processQueueItem(item) {
+    // Phase1: Storage アップロード。部分成功後のリトライで二重にならないよう
+    // storageUploaded フラグ + upsert:true。
+    if (!item.storageUploaded) {
+      const { error: upErr } = await supabase.storage.from(BUCKET)
+        .upload(item.storagePath, item.blob, { contentType: item.contentType, upsert: true });
+      if (upErr) throw upErr;
+      item.storageUploaded = true;
+      await idbPut(item);
+    }
+    // Phase2: DB 書込み
+    if (item.type === 'new') {
+      // 二重 insert 防止: storagePath は item 固有なので自然キーになる。
+      // 「アップ成功・insert 応答だけ消失」でリトライしても重複行を作らない。
+      const { data: existing } = await supabase
+        .from('js_safety_findings').select('id').eq('before_photo_path', item.storagePath).limit(1);
+      if (!existing || existing.length === 0) {
+        const { error } = await supabase.from('js_safety_findings').insert({
+          patrol_date: item.patrol_date,
+          location: item.location,
+          workplace_id: item.workplace_id,
+          comment: item.comment,
+          before_photo_path: item.storagePath,
+          created_by: 'mobile',
+        });
+        if (error) throw error;
+      }
+    } else {
+      const { error } = await supabase.from('js_safety_findings').update({
+        after_photo_path: item.storagePath,
+        follow_comment: null,
+        followed_at: new Date().toISOString(),
+      }).eq('id', item.finding_id);
+      if (error) throw error;
+    }
+  }
+
+  function scheduleRetry() {
+    if (retryTimer) return;
+    retryTimer = setTimeout(() => { retryTimer = null; drainQueue(); }, 8000);
+  }
+
+  function renderQueueBanner() {
+    const n = queueItems.length;
+    if (n === 0) { queueBanner.classList.add('hidden'); return; }
+    queueBanner.classList.remove('hidden');
+    const errored = queueItems.filter(i => (i.retryCount || 0) > 0).length;
+    queueBanner.classList.toggle('offline', !navigator.onLine);
+    queueBanner.classList.toggle('error', navigator.onLine && errored > 0);
+
+    let text;
+    if (!navigator.onLine) text = `📴 オフライン — 送信待ち ${n}件（接続後に自動送信）`;
+    else if (draining) text = `📤 送信中… 残り ${n}件`;
+    else if (errored > 0) text = `⚠️ 送信待ち ${n}件（自動で再送します）`;
+    else text = `📤 送信待ち ${n}件`;
+    qbText.textContent = text;
+
+    qbSpin.classList.toggle('hidden', !(draining && navigator.onLine));
+    qbRetry.classList.toggle('hidden', !(navigator.onLine && errored > 0 && !draining));
+  }
+
+  // フォローが未送信(キュー滞留)の finding id 集合。フォロー一覧で楽観的に
+  // 「完了(送信待ち)」表示し、再選択による二重フォローを防ぐ。
+  function pendingFollowIds() {
+    return new Set(queueItems.filter(i => i.type === 'follow').map(i => i.finding_id));
   }
 
   // ========================================
