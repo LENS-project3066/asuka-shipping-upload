@@ -211,6 +211,13 @@
     display: flex; align-items: center; gap: 10px;
     box-shadow: var(--shadow-pop); z-index: 900;
   }
+  .idb-warning {
+    background: var(--danger-weak); color: var(--danger);
+    border: 1px solid var(--danger-line); border-radius: var(--r-card);
+    padding: 10px 12px; font-size: 13px; font-weight: 500;
+    line-height: 1.5; margin-bottom: 12px;
+  }
+  .idb-warning.hidden { display: none; }
   .queue-banner.hidden { display: none; }
   .queue-banner.error { background: #b23b3b; }
   .queue-banner.offline { background: #5a5048; }
@@ -238,6 +245,12 @@
 <div class="container">
   <h1>📋 5S安全パトロール</h1>
   <p class="subtitle" id="pageSubtitle">指摘登録 & フォロー</p>
+
+  <!-- 端末で IndexedDB(送信待ちの一時保存)が使えない場合の恒久警告 (M-7) -->
+  <div class="idb-warning hidden" id="idbWarning">
+    ⚠️ この端末では送信待ちの一時保存が使えません（プライベートブラウズ等が原因の可能性）。
+    送信に失敗する場合は、通常モードのブラウザで開き直してください。
+  </div>
 
   <!-- 拠点選択画面 -->
   <div id="locationScreen">
@@ -342,6 +355,11 @@
   const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImltdW54Zm9qb3NucG9vaGJrdXlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMxODAyNzIsImV4cCI6MjA3ODc1NjI3Mn0.5opdeiZ-eAboMERcZKwD3F1K8Mrd8tu7v6D8f41qIS8';
   const BUCKET = 'quality-docs';
   const FOLDER = 'safety-patrol';
+  // 写真縮小(M-8): 原寸4000px級の写真を積むと帯域/IndexedDB Quota を圧迫するため、
+  // 撮影直後に canvas で縮小してからキューに積む。長辺2048pxあれば A4 印刷でも
+  // 十分・画面表示は余裕。quality0.9 は視覚的にほぼ無損失。
+  const MAX_EDGE = 2048;
+  const JPEG_QUALITY = 0.9;
   const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
   // 共通DOM
@@ -356,6 +374,7 @@
   const qbText = document.getElementById('qbText');
   const qbRetry = document.getElementById('qbRetry');
   const qbDiscard = document.getElementById('qbDiscard');
+  const idbWarning = document.getElementById('idbWarning');
 
   // フォロータブDOM
   const followMonthInput = document.getElementById('followMonthInput');
@@ -399,9 +418,8 @@
 
   function init() {
     // フォロー: 対象月のデフォルトは先月 (showMain → loadFindings が値を参照するので最初にセット)
-    const now = new Date();
-    const defaultFollow = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    followMonthInput.value = `${defaultFollow.getFullYear()}-${String(defaultFollow.getMonth() + 1).padStart(2, '0')}`;
+    // JST 基準で先月を求める(端末TZズレ・月境界ズレを防ぐ・M-6)
+    followMonthInput.value = jstMonthStr(-1);
     followMonthInput.addEventListener('change', () => {
       if (currentLocation) loadFindings(currentLocation);
     });
@@ -459,7 +477,11 @@
     window.addEventListener('online', () => { renderQueueBanner(); drainQueue(); });
     window.addEventListener('offline', renderQueueBanner);
     setInterval(drainQueue, 15000);
-    refreshQueueMirror().then(drainQueue);
+    // IndexedDB 可否を判定して恒久警告を出し分け、可なら未送信分を復元して drain 開始
+    probeIndexedDB().then(ok => {
+      idbWarning.classList.toggle('hidden', ok);
+      if (ok) refreshQueueMirror().then(drainQueue);
+    });
   }
 
   async function showMain(location) {
@@ -710,8 +732,8 @@
   async function submitNew() {
     if (!newFile || !workplaceSelect.value || !commentInput.value.trim()) return;
 
-    const today = new Date();
-    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    // patrol_date は JST 基準の暦日で固定(端末TZズレ・月末深夜の月境界ズレを防ぐ・M-6)
+    const dateStr = jstDateStr();
 
     try {
       await enqueueUpload({
@@ -769,6 +791,17 @@
     });
   }
 
+  // IndexedDB が使えるか起動時に判定(M-7)。iOS プライベートブラウズ等では
+  // open が error/hang になり、enqueue が毎回エラートースト止まりになる。事前に
+  // 検知して恒久警告を出す。hang 対策に 3s タイムアウトで「不可」とみなす。
+  function probeIndexedDB() {
+    if (!window.indexedDB) return Promise.resolve(false);
+    return Promise.race([
+      openQueueDB().then(() => true, () => false),
+      new Promise(res => setTimeout(() => res(false), 3000)),
+    ]);
+  }
+
   function idbTx(mode, fn) {
     return openQueueDB().then(db => new Promise((resolve, reject) => {
       const tx = db.transaction(QUEUE_STORE, mode);
@@ -815,10 +848,27 @@
     renderQueueBanner();
   }
 
+  // 多タブ/PWA で同時に開くと両コンテキストが同じキューを drain し、同一 item を
+  // 二重処理しうる(draining はページ内フラグのみ)。Web Locks でコンテキスト間排他し、
+  // 他が drain 中ならスキップする(M-1)。未対応環境(古い Safari 等)はページ内
+  // フラグのみで従来動作。なお new の二重 insert は DB UNIQUE(before_photo_path)、
+  // follow の後勝ちは `.is(after_photo_path,null)` で別途守られている(多層防御)。
+  async function drainQueue() {
+    if (!navigator.onLine) { renderQueueBanner(); return; }
+    if (navigator.locks && navigator.locks.request) {
+      await navigator.locks.request('safetyPatrolDrain', { ifAvailable: true }, lock => {
+        if (!lock) return;          // 他コンテキストが drain 中 → 二重 drain を回避
+        return drainQueueInner();
+      });
+    } else {
+      await drainQueueInner();
+    }
+  }
+
   // 古い順に1件ずつ処理。失敗は retryCount++ で残し、次の item へ進む(毒入り1件で
   // 全体を止めない)。MAX_RETRY 到達分はもう叩かず(失敗確定)、人手の再送/破棄を待つ。
   // まだ再試行余地のある失敗が出たらバックオフ後に再試行。
-  async function drainQueue() {
+  async function drainQueueInner() {
     if (draining || !navigator.onLine) { renderQueueBanner(); return; }
     draining = true;
     renderQueueBanner();
@@ -966,6 +1016,39 @@
   // 共通ユーティリティ
   // ========================================
 
+  // 写真を canvas で縮小し JPEG に再エンコードして返す(M-8)。縮小不要・デコード不可・
+  // 未対応ブラウザでは原本をそのまま返す(回転事故やデータ破損を起こさない安全側)。
+  // EXIF 回転は createImageBitmap の imageOrientation:'from-image' で物理的に反映する。
+  // これを怠ると再エンコードで EXIF が剥がれ、縦写真が横倒しで保存されてしまう。
+  async function shrinkImage(file) {
+    if (!file || !file.type || !file.type.startsWith('image/')) return file;
+    if (typeof createImageBitmap !== 'function') return file; // 未対応(回転反映できない)→原本
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch (e) {
+      return file; // HEIC 等デコード不可 → 原本のまま(現状動作維持)
+    }
+    try {
+      const longEdge = Math.max(bitmap.width, bitmap.height);
+      if (longEdge <= MAX_EDGE) return file; // 既に十分小さい → 再圧縮しない
+      const scale = MAX_EDGE / longEdge;
+      const w = Math.round(bitmap.width * scale);
+      const h = Math.round(bitmap.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', JPEG_QUALITY));
+      if (!blob || blob.size >= file.size) return file; // 縮小で逆に増えたら原本
+      return new File([blob], 'photo.jpg', { type: 'image/jpeg' });
+    } catch (e) {
+      return file;
+    } finally {
+      if (bitmap && bitmap.close) bitmap.close();
+    }
+  }
+
   function handlePhoto(file, mode) {
     if (!file) return;
     const preview = mode === 'follow' ? followPhotoPreview : newPhotoPreview;
@@ -974,6 +1057,15 @@
 
     if (mode === 'follow') followFile = file;
     else newFile = file;
+
+    // 縮小は裏で実行(楽観 write-behind の即時性を保つ)。プレビューは原本で即表示し、
+    // 縮小が間に合えば差し替える。送信が縮小より早ければ原本を送る(=安全フォールバック)。
+    shrinkImage(file).then(shrunk => {
+      if (shrunk === file) return;
+      // 縮小中にユーザーが写真を外した/差し替えた場合は上書きしない
+      if (mode === 'follow') { if (followFile === file) followFile = shrunk; }
+      else { if (newFile === file) newFile = shrunk; }
+    }).catch(() => { /* 原本のまま */ });
 
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -1003,6 +1095,21 @@
     const d = document.createElement('div');
     d.textContent = str;
     return d.innerHTML;
+  }
+
+  // 端末TZに依存せず JST(UTC+9) の壁時計を返す(M-6)。patrol_date 等の「暦日」は
+  // 業務TZ(JST)基準で確定する必要がある。端末TZズレや、月末深夜に端末TZでは翌日/
+  // 翌月へ転がってしまうズレ(月境界ズレ)を防ぐ。UTC ミリ秒に +9h して getUTC* で読む。
+  // ※ createdAt/followed_at は toISOString() の UTC 絶対時刻なので TZ 非依存(変更不要)。
+  function jstNow() { return new Date(Date.now() + 9 * 3600 * 1000); }
+  function jstDateStr() {
+    const d = jstNow();
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+  function jstMonthStr(offsetMonths) {
+    const d = jstNow();
+    const base = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + (offsetMonths || 0), 1));
+    return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, '0')}`;
   }
 })();
 </script>
