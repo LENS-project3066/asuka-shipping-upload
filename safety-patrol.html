@@ -415,7 +415,7 @@
   let retryTimer = null; // 失敗後のバックオフ再試行タイマー
 
   // init() は IIFE 末尾で呼ぶ。ここ(定義群より前)で呼ぶと、init 内の
-  // probeIndexedDB()→openQueueDB() が後方(779行〜)で let/const 定義される
+  // probeIndexedDB()→openQueueDB() が後方で let/const 定義される
   // _qdb/idbPut 等を TDZ のまま参照し「Cannot access '_qdb' before
   // initialization」で init が中断 → idbPut 等が永久未初期化になり送信不能になる。
   function init() {
@@ -718,7 +718,7 @@
     if (error) { workplaceSelect.innerHTML = '<option value="">読込失敗</option>'; return; }
 
     workplaceSelect.innerHTML = '<option value="">-- 選択してください --</option>' +
-      (data || []).map(w => `<option value="${w.id}">${w.name}</option>`).join('');
+      (data || []).map(w => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join('');
 
     const lastId = localStorage.getItem('safetyPatrolLastWorkplace');
     if (lastId && (data || []).some(w => String(w.id) === String(lastId))) workplaceSelect.value = lastId;
@@ -1117,7 +1117,15 @@
   }
 
   // すべての let/const/function 定義が初期化された後に起動する(TDZ 回避)。
-  init();
+  // init が万一 throw しても無音で全ボタン死にしないよう捕捉し、可視のエラーを出す
+  // (今回の TDZ 障害は init 中断が無音で発見が遅れた。同種の再発を早期発見するため)。
+  try {
+    init();
+  } catch (e) {
+    console.error('[safety-patrol] init failed:', e);
+    const w = document.getElementById('idbWarning');
+    if (w) { w.textContent = '⚠️ ページの初期化に失敗しました。再読み込みしてください'; w.classList.remove('hidden'); }
+  }
 })();
 </script>
 </body>
