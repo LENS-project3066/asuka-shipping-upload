@@ -414,8 +414,10 @@
   let draining = false;  // drain ループの二重起動防止
   let retryTimer = null; // 失敗後のバックオフ再試行タイマー
 
-  init();
-
+  // init() は IIFE 末尾で呼ぶ。ここ(定義群より前)で呼ぶと、init 内の
+  // probeIndexedDB()→openQueueDB() が後方(779行〜)で let/const 定義される
+  // _qdb/idbPut 等を TDZ のまま参照し「Cannot access '_qdb' before
+  // initialization」で init が中断 → idbPut 等が永久未初期化になり送信不能になる。
   function init() {
     // フォロー: 対象月のデフォルトは先月 (showMain → loadFindings が値を参照するので最初にセット)
     // JST 基準で先月を求める(端末TZズレ・月境界ズレを防ぐ・M-6)
@@ -690,7 +692,7 @@
       });
     } catch (e) {
       console.error('[safety-patrol] enqueue(follow) failed:', e);
-      showStatusEl(followStatus, `保存失敗: ${(e && e.name) || 'Error'}: ${(e && e.message) || ''}`, 'error');
+      showStatusEl(followStatus, '保存に失敗しました。もう一度お試しください', 'error');
       return;
     }
 
@@ -749,7 +751,7 @@
       });
     } catch (e) {
       console.error('[safety-patrol] enqueue(new) failed:', e);
-      showStatusEl(newStatus, `保存失敗: ${(e && e.name) || 'Error'}: ${(e && e.message) || ''}`, 'error');
+      showStatusEl(newStatus, '保存に失敗しました。もう一度お試しください', 'error');
       return;
     }
 
@@ -1113,6 +1115,9 @@
     const base = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + (offsetMonths || 0), 1));
     return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, '0')}`;
   }
+
+  // すべての let/const/function 定義が初期化された後に起動する(TDZ 回避)。
+  init();
 })();
 </script>
 </body>
