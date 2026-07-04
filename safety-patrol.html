@@ -689,7 +689,8 @@
         ext: (followFile.name.split('.').pop() || 'jpg').toLowerCase(),
       });
     } catch (e) {
-      showStatusEl(followStatus, '保存に失敗しました。もう一度お試しください', 'error');
+      console.error('[safety-patrol] enqueue(follow) failed:', e);
+      showStatusEl(followStatus, `保存に失敗しました（${(e && e.name) || 'Error'}）。もう一度お試しください`, 'error');
       return;
     }
 
@@ -747,7 +748,8 @@
         ext: (newFile.name.split('.').pop() || 'jpg').toLowerCase(),
       });
     } catch (e) {
-      showStatusEl(newStatus, '保存に失敗しました。もう一度お試しください', 'error');
+      console.error('[safety-patrol] enqueue(new) failed:', e);
+      showStatusEl(newStatus, `保存に失敗しました（${(e && e.name) || 'Error'}）。もう一度お試しください`, 'error');
       return;
     }
 
