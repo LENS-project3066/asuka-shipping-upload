@@ -1,0 +1,9 @@
+{
+  "name": "asuka-shipping-upload",
+  "version": "1.0.0",
+  "private": true,
+  "description": "5S安全パトロール等の現場アップロードページ(GitHub Pages 静的HTML)。npm依存は持たない。",
+  "scripts": {
+    "test": "node --test"
+  }
+}
