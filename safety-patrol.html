@@ -40,6 +40,11 @@
     -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   }
   .container { max-width: 440px; margin: 0 auto; padding: 20px 16px 16px; }
+  /* 送信待ちバナーは position:fixed で画面下に居座るので、出ている間だけ下に逃げ場を作る。
+     ⚠⚠ これが無いと **バナーが一番下のボタン(=送信)を覆って押せなくなる**。
+     送信待ちが溜まっているときほど押せなくなる = 一番困る場面で詰む(2026-09-05 現場で発生)。
+     ⛔ バナーにボタンを足したらこの値も見直すこと(バナーが高くなるぶん隠れる量も増える)。 */
+  body.has-queue .container { padding-bottom: 108px; }
   h1 { font-size: 19px; text-align: center; margin-bottom: 3px; font-weight: 500; letter-spacing: -0.01em; }
   .subtitle { text-align: center; color: var(--muted); font-size: 13px; margin-bottom: 22px; }
 
@@ -344,6 +349,8 @@
 <div class="queue-banner hidden" id="queueBanner">
   <div class="qb-spin hidden" id="qbSpin"></div>
   <div class="qb-text" id="qbText"></div>
+  <!-- ⛔ 並び順を変えないこと: 逃がす手(端末に保存)を、消す手(破棄)より先に見せる。 -->
+  <button class="qb-retry hidden" id="qbSave">端末に保存</button>
   <button class="qb-retry hidden" id="qbDiscard">破棄</button>
   <button class="qb-retry hidden" id="qbRetry">今すぐ再送</button>
 </div>
@@ -359,8 +366,40 @@
   // 撮影直後に canvas で縮小してからキューに積む。長辺2048pxあれば A4 印刷でも
   // 十分・画面表示は余裕。quality0.9 は視覚的にほぼ無損失。
   const MAX_EDGE = 2048;
-  const JPEG_QUALITY = 0.9;
-  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  // ⚠ **寸法(2048)は下げないこと**。PC の指摘ビューアは拡大表示で Storage の**原本を
+  //   そのまま**読む(getPublicUrl = object/public・縮小変換なし)ので、寸法を削ると
+  //   拡大したときの解像度がそのまま落ちる。細かい不具合や表示ラベルが読めなくなる。
+  // ★ 落としてよいのは品質の方。実測(2026-09-05・現場の実写真 1536x2048):
+  //   q0.9=652KB / q0.8=462KB(-29%) / 1600px+q0.72=191KB。
+  //   q0.8 は等倍で見比べて許容と判断(浅井さん確認済)。⛔ 寸法を削る案は不採用。
+  const JPEG_QUALITY = 0.8;
+
+  // アップロードのタイムアウト(ms)。
+  // ⚠⚠ **これが無いと電波が弱い所で fetch がハングし、drain ループの `draining` が
+  //   立ちっぱなしになって「今すぐ再送」も 15 秒間隔の自動再送も入口で弾かれる**
+  //   ＝ クルクル回ったまま、電波が回復しても自力では復帰しない(復帰手段はページ再読込だけ)。
+  //   2026-09-05 の安全パトロールで実際に詰まった。
+  // ★ 短すぎると「遅いが成功しつつある」通信を殺すので 60 秒。462KB なら 60kbps でも届く。
+  //   ⛔ Promise.race で見捨てる形にしないこと ── 死んだ通信が裏で走り続けて帯域を食い、
+  //   再送とぶつかる。AbortController で実際に切る。
+  const REQUEST_TIMEOUT_MS = 60000;
+  /**
+   * タイムアウト付き fetch。supabase-js の全リクエストに効かせる。
+   * ⚠ upload だけでなく select にも効く(こちらもハングすると画面が固まるので同じ扱いでよい)。
+   * ⚠ AbortError は「失敗」として上位へ伝わり、キューは retry に回る = 写真は消えない。
+   */
+  function fetchWithTimeout(input, init) {
+    // AbortController が無い環境では素の fetch に倒す(切れないだけで動作は従来どおり)。
+    if (typeof AbortController !== 'function') return fetch(input, init);
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+    return fetch(input, Object.assign({}, init, { signal: ctl.signal }))
+      .finally(() => clearTimeout(timer));
+  }
+
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+    global: { fetch: fetchWithTimeout },
+  });
 
   // 共通DOM
   const locationScreen = document.getElementById('locationScreen');
@@ -374,6 +413,7 @@
   const qbText = document.getElementById('qbText');
   const qbRetry = document.getElementById('qbRetry');
   const qbDiscard = document.getElementById('qbDiscard');
+  const qbSave = document.getElementById('qbSave');
   const idbWarning = document.getElementById('idbWarning');
 
   // フォロータブDOM
@@ -476,6 +516,7 @@
     // online 復帰・定期(15s)・「今すぐ再送」でも drain を蹴る。
     qbRetry.addEventListener('click', retryFailed);
     qbDiscard.addEventListener('click', discardFailed);
+    qbSave.addEventListener('click', () => { void saveToDevice(); });
     window.addEventListener('online', () => { renderQueueBanner(); drainQueue(); });
     window.addEventListener('offline', renderQueueBanner);
     setInterval(drainQueue, 15000);
@@ -779,7 +820,17 @@
 
   const QUEUE_DB = 'safetyPatrolQueue';
   const QUEUE_STORE = 'uploads';
-  const MAX_RETRY = 5; // これを超えたら「送信できない」失敗確定。自動再試行を止め人手(再送/破棄)に委ねる
+  // ⚠⚠ **「知らせるしきい値」と「諦めるしきい値」を分ける**(2026-09-05)。
+  // 旧版は MAX_RETRY=5 の 1 本で、再送が 15 秒間隔だったため **電波が悪いと約 1 分で
+  // 「送信できない」確定になり、自動再送が永久に止まった**。現場は良い場所へ移動しても
+  // 何も起きず、手で「今すぐ再送」を押すまで詰まったまま(押せない場面もある = 上の has-queue)。
+  // ★ 直し方: 早く知らせる(WARN)のはそのまま、諦める(MAX)のはずっと後ろへ。
+  //   さらに再送間隔を指数的に伸ばして、電池と通信を無駄に使わずに粘る。
+  const WARN_RETRY = 5;   // これを超えたら画面で知らせる(ボタンを出す)。⛔ 送信は止めない
+  const MAX_RETRY = 50;   // ここまで来たら本当に諦める(恒久エラーの打ち切り)
+  /** 連続失敗回数 → 次に試すまでの待ち時間(ms)。15秒→30秒→1分→3分→10分で頭打ち。 */
+  const RETRY_DELAYS_MS = [15000, 30000, 60000, 180000, 600000];
+  const retryDelayFor = (n) => RETRY_DELAYS_MS[Math.min(n, RETRY_DELAYS_MS.length - 1)];
   let _qdb = null;
 
   function openQueueDB() {
@@ -889,7 +940,14 @@
           if (item.type === 'follow') followDone = true;
         } catch (err) {
           item.retryCount = (item.retryCount || 0) + 1;
-          item.lastError = err && err.message ? err.message : String(err);
+          // ⚠ タイムアウトは AbortError で来る。現場に「切れた」と分かる言葉で残す
+          //   (破棄ダイアログに出るのはこの文字列)。
+          item.lastError =
+            err && err.name === 'AbortError'
+              ? `通信が遅くて時間切れになりました（${Math.round(REQUEST_TIMEOUT_MS / 1000)}秒）`
+              : err && err.message
+                ? err.message
+                : String(err);
           await idbPut(item);
           if (item.retryCount < MAX_RETRY) willRetry = true; // まだ再試行する
         }
@@ -951,34 +1009,91 @@
     }
   }
 
+  /**
+   * 次の再送を予約する。⚠ **待ち時間はキュー内で一番進んでいない失敗回数で決める**
+   * ── 1 件だけ何度も失敗している状況で、後から積んだ新しい写真まで 10 分待たせないため。
+   * ⛔ 固定 8 秒に戻さないこと(電波が無い場所で 8 秒ごとに叩き続けると電池を食う)。
+   */
   function scheduleRetry() {
     if (retryTimer) return;
-    retryTimer = setTimeout(() => { retryTimer = null; drainQueue(); }, 8000);
+    const minFails = queueItems.reduce(
+      (m, i) => Math.min(m, i.retryCount || 0),
+      Number.MAX_SAFE_INTEGER
+    );
+    const delay = retryDelayFor(minFails === Number.MAX_SAFE_INTEGER ? 0 : minFails);
+    retryTimer = setTimeout(() => { retryTimer = null; drainQueue(); }, delay);
   }
 
   function renderQueueBanner() {
     const n = queueItems.length;
+    // ⚠ バナーが出ている間だけ本文の下に逃げ場を作る(バナーが送信ボタンを覆うのを防ぐ)。
+    document.body.classList.toggle('has-queue', n > 0);
     if (n === 0) { queueBanner.classList.add('hidden'); return; }
     queueBanner.classList.remove('hidden');
-    const failed = queueItems.filter(i => (i.retryCount || 0) >= MAX_RETRY).length;
-    const pending = n - failed;
-    const retrying = queueItems.some(i => { const r = i.retryCount || 0; return r > 0 && r < MAX_RETRY; });
+    // ⚠ 「知らせる」は WARN_RETRY。⛔ **ここで「送信できない」と言い切らないこと** ──
+    //   MAX_RETRY まで自動再送を続けているので、その文言は嘘になるうえ、
+    //   現場に「もう破棄するしかない」と誤解させて写真を消させる(2026-09-05)。
+    const warned = queueItems.filter(i => (i.retryCount || 0) >= WARN_RETRY).length;
+    const retrying = queueItems.some(i => (i.retryCount || 0) > 0);
 
-    queueBanner.classList.toggle('offline', !navigator.onLine && failed === 0);
-    queueBanner.classList.toggle('error', failed > 0 || (navigator.onLine && retrying));
+    queueBanner.classList.toggle('offline', !navigator.onLine && warned === 0);
+    queueBanner.classList.toggle('error', warned > 0 || (navigator.onLine && retrying));
 
     let text;
-    if (failed > 0) text = `✕ 送信できない ${failed}件${pending ? ` / 送信待ち ${pending}件` : ''}`;
-    else if (!navigator.onLine) text = `📴 オフライン — 送信待ち ${n}件（接続後に自動送信）`;
+    if (!navigator.onLine) text = `📴 オフライン — 送信待ち ${n}件（接続後に自動送信）`;
     else if (draining) text = `📤 送信中… 残り ${n}件`;
+    else if (warned > 0) text = `⚠️ まだ送れていません ${n}件（電波の良い所で自動送信）`;
     else if (retrying) text = `⚠️ 送信待ち ${n}件（自動で再送します）`;
     else text = `📤 送信待ち ${n}件`;
     qbText.textContent = text;
 
     qbSpin.classList.toggle('hidden', !(draining && navigator.onLine));
-    // 再送: オンラインで(失敗 or リトライ中)かつ drain 停止中。破棄: 失敗確定がある時だけ。
-    qbRetry.classList.toggle('hidden', !(navigator.onLine && (failed > 0 || retrying) && !draining));
-    qbDiscard.classList.toggle('hidden', failed === 0);
+    // 再送: オンラインで再試行中かつ drain 停止中。
+    qbRetry.classList.toggle('hidden', !(navigator.onLine && retrying && !draining));
+    // 端末に保存 / 破棄: 知らせるしきい値を超えてから出す。
+    // ⛔ 「保存」を「破棄」より **先(左)** に置くこと ── 逃がす手を与えずに消させない。
+    qbSave.classList.toggle('hidden', warned === 0);
+    qbDiscard.classList.toggle('hidden', warned === 0);
+  }
+
+  /**
+   * 送信待ちの写真を**端末に保存**する(最後の砦)。
+   *
+   * 【なぜ要るか】キューの写真はブラウザの中(IndexedDB)にしか無い。撮影は
+   * `capture="environment"` なので **カメラロールには残っていない**。∴ 送信が続けて
+   * 失敗したとき、現場に残された操作が「破棄」しか無いと **原本ごと消える**。
+   * ここで端末へ逃がせるようにして、最悪でも写真は手元に残るようにする。
+   *
+   * ⚠ iOS は共有シート経由(navigator.share)でないと写真アプリへ入らないので、
+   *   使えるならそちらを優先し、無ければダウンロードに倒す。
+   */
+  async function saveToDevice() {
+    const items = await idbGetAll() || [];
+    if (!items.length) return;
+    const files = items.map((it, i) => {
+      const ext = (it.storagePath.split('.').pop() || 'jpg');
+      const name = `安全指摘_${(it.patrol_date || '').replace(/-/g, '')}_${i + 1}.${ext}`;
+      return new File([it.blob], name, { type: it.contentType || 'image/jpeg' });
+    });
+    try {
+      if (navigator.canShare && navigator.canShare({ files }) && navigator.share) {
+        await navigator.share({ files, title: '安全パトロール 指摘写真' });
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // 利用者が共有シートを閉じただけ
+      // 共有が使えない端末 → 下のダウンロードに倒す
+    }
+    // フォールバック: 1 枚ずつダウンロード。⚠ 連続で走らせるとブロックされる端末が
+    //   あるので間隔を空ける。
+    for (const f of files) {
+      const url = URL.createObjectURL(f);
+      const a = document.createElement('a');
+      a.href = url; a.download = f.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      await new Promise(r => setTimeout(r, 400));
+    }
   }
 
   // 1件破棄。アップロード済みなら Storage の孤児ファイルを best-effort で掃除する。
@@ -1001,10 +1116,18 @@
 
   // 「破棄」: 送信できない確定分を Storage 掃除つきで捨てる。
   async function discardFailed() {
-    const items = (await idbGetAll() || []).filter(i => (i.retryCount || 0) >= MAX_RETRY);
+    // ⚠ しきい値は WARN_RETRY(＝画面で知らせた分)。⛔ MAX_RETRY に戻さないこと ──
+    //   バナーに破棄ボタンが出ているのに何も消えない状態になる。
+    const items = (await idbGetAll() || []).filter(i => (i.retryCount || 0) >= WARN_RETRY);
     if (!items.length) return;
     const detail = items.slice(0, 3).map(i => '・' + (i.lastError || '不明なエラー')).join('\n');
-    if (!confirm(`送信できない ${items.length}件を破棄しますか？\n${detail}\n\n破棄すると、この写真は送信されません。`)) return;
+    // ⚠⚠ 撮影は capture 経由なので **写真はカメラロールに残っていない**。破棄＝原本が消える。
+    //   ∴ 逃がす手があることを、消す直前に必ず言う。
+    if (!confirm(
+      `${items.length}件を破棄しますか？\n${detail}\n\n` +
+      `⚠ この写真はスマホの写真アプリには残っていません。\n` +
+      `破棄すると元に戻せません。先に「端末に保存」で写真を残せます。`
+    )) return;
     for (const it of items) await discardItem(it);
     await refreshQueueMirror();
     if (findings.length) renderFindingList();
