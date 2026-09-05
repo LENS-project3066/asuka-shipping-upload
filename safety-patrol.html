@@ -43,8 +43,14 @@
   /* 送信待ちバナーは position:fixed で画面下に居座るので、出ている間だけ下に逃げ場を作る。
      ⚠⚠ これが無いと **バナーが一番下のボタン(=送信)を覆って押せなくなる**。
      送信待ちが溜まっているときほど押せなくなる = 一番困る場面で詰む(2026-09-05 現場で発生)。
-     ⛔ バナーにボタンを足したらこの値も見直すこと(バナーが高くなるぶん隠れる量も増える)。 */
-  body.has-queue .container { padding-bottom: 108px; }
+
+     ⚠⚠ **値は実行時にバナーの実高さから入れる**(`--queue-pad`)。
+     ⛔ 固定値に戻さないこと ── 初版は 108px 固定で、同じコミットで 3 つ目のボタンを
+     足したせいで警告状態だとテキストが折り返してバナーが 130px 級に伸び、
+     **直したはずの「送信ボタンが覆われる」が部分再発していた**
+     (2026-09-05 クロスレビュー M-1・肯定/否定の両レビュアーが独立に指摘)。
+     ここの既定値は JS が動かなかったときの保険。 */
+  body.has-queue .container { padding-bottom: var(--queue-pad, 160px); }
   h1 { font-size: 19px; text-align: center; margin-bottom: 3px; font-weight: 500; letter-spacing: -0.01em; }
   .subtitle { text-align: center; color: var(--muted); font-size: 13px; margin-bottom: 22px; }
 
@@ -213,7 +219,9 @@
     bottom: 14px; width: calc(100% - 24px); max-width: 416px;
     background: #23262e; color: #fff; border-radius: var(--r-card);
     padding: 11px 14px; font-size: 13px; font-weight: 500;
-    display: flex; align-items: center; gap: 10px;
+    /* ⚠ ボタンが 3 つ出る状態(警告時)で横が潰れないよう折り返す。⛔ nowrap に戻さないこと ──
+       `.qb-retry` は flex-shrink:0 なので、潰れるのは文字側だけになり 5 行に化ける。 */
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     box-shadow: var(--shadow-pop); z-index: 900;
   }
   .idb-warning {
@@ -226,7 +234,9 @@
   .queue-banner.hidden { display: none; }
   .queue-banner.error { background: #b23b3b; }
   .queue-banner.offline { background: #5a5048; }
-  .qb-text { flex: 1; min-width: 0; }
+  /* ⚠ テキストは 1 行目を丸ごと使う(flex-basis:100%)。ボタンは 2 行目へ回るので、
+     ボタンが増えても文字が細切れに折り返してバナーが縦に伸びることがない。 */
+  .qb-text { flex: 1 1 100%; min-width: 0; }
   .qb-spin {
     width: 15px; height: 15px; flex-shrink: 0;
     border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff;
@@ -379,10 +389,39 @@
   //   立ちっぱなしになって「今すぐ再送」も 15 秒間隔の自動再送も入口で弾かれる**
   //   ＝ クルクル回ったまま、電波が回復しても自力では復帰しない(復帰手段はページ再読込だけ)。
   //   2026-09-05 の安全パトロールで実際に詰まった。
-  // ★ 短すぎると「遅いが成功しつつある」通信を殺すので 60 秒。462KB なら 60kbps でも届く。
-  //   ⛔ Promise.race で見捨てる形にしないこと ── 死んだ通信が裏で走り続けて帯域を食い、
+  // ⛔ Promise.race で見捨てる形にしないこと ── 死んだ通信が裏で走り続けて帯域を食い、
   //   再送とぶつかる。AbortController で実際に切る。
-  const REQUEST_TIMEOUT_MS = 60000;
+  //
+  // ★ 値の根拠（⛔ 初版の「60秒。462KB なら 60kbps でも届く」は**算数が誤り**だった。
+  //   462KB = 462*1024*8 = 3,785 kbit ÷ 60kbps = **63.1 秒**で 60 秒に間に合わない。
+  //   ＝ 圏外ぎわで毎回 95% 送ったところで切る、という設計意図と正反対の挙動になっていた）:
+  //   基準 90 秒 ＝ 462KB を約 42kbps で送り切れる。さらに失敗を重ねた item ほど伸ばす
+  //   （90→180 秒）ので、「遅いが進んでいる」回線はいずれ完走する。
+  //   ⚠ 上限を置くのは、その間 `draining` が立って他の写真が止まるため。
+  const BASE_TIMEOUT_MS = 90000;
+  const MAX_TIMEOUT_MS = 180000;
+  /** 失敗回数 n の item に許すタイムアウト。 */
+  const timeoutForAttempt = (n) => Math.min(BASE_TIMEOUT_MS * (1 + n), MAX_TIMEOUT_MS);
+  /** 現在の drain 対象に適用中のタイムアウト（直列 drain なので 1 本で足りる）。 */
+  let requestTimeoutMs = BASE_TIMEOUT_MS;
+
+  /**
+   * タイムアウト(abort)由来の失敗か。
+   *
+   * ⚠⚠ **`err.name === 'AbortError'` だけでは当たらない**（2026-09-05 クロスレビュー H-3）。
+   * supabase-js は元の例外を包み直す:
+   *   - Storage  → `StorageUnknownError`（元の例外は `originalError` に退避）
+   *   - PostgREST → `PostgrestError`（message が `AbortError: ...` の文字列になる）
+   * ∴ 初版の判定は**両経路とも false** で、日本語の「時間切れ」は一度も出ず、
+   * 破棄ダイアログには英語の生メッセージ（`The user aborted a request.` 等）が並んでいた。
+   * ⛔ name の一致だけに戻さないこと。
+   */
+  function isAbortError(e) {
+    if (!e) return false;
+    if (e.name === 'AbortError') return true;
+    if (e.originalError && e.originalError.name === 'AbortError') return true;
+    return /abort/i.test(String(e.message || ''));
+  }
   /**
    * タイムアウト付き fetch。supabase-js の全リクエストに効かせる。
    * ⚠ upload だけでなく select にも効く(こちらもハングすると画面が固まるので同じ扱いでよい)。
@@ -392,7 +431,15 @@
     // AbortController が無い環境では素の fetch に倒す(切れないだけで動作は従来どおり)。
     if (typeof AbortController !== 'function') return fetch(input, init);
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+    // ⚠ 呼び出し側が signal を渡してきたら **捨てずに束ねる**(cross-review M-7)。
+    //   Object.assign で上書きすると、将来 postgrest の `.abortSignal()` を入れた日に
+    //   **黙って効かなくなる**(気づけない型の壊れ方)。
+    const outer = init && init.signal;
+    if (outer) {
+      if (outer.aborted) ctl.abort();
+      else outer.addEventListener('abort', () => ctl.abort(), { once: true });
+    }
+    const timer = setTimeout(() => ctl.abort(), requestTimeoutMs);
     return fetch(input, Object.assign({}, init, { signal: ctl.signal }))
       .finally(() => clearTimeout(timer));
   }
@@ -516,7 +563,14 @@
     // online 復帰・定期(15s)・「今すぐ再送」でも drain を蹴る。
     qbRetry.addEventListener('click', retryFailed);
     qbDiscard.addEventListener('click', discardFailed);
-    qbSave.addEventListener('click', () => { void saveToDevice(); });
+    // ⛔ `void saveToDevice()` に戻さないこと ── 例外が unhandled rejection になり、
+    //    最後の砦が**無言で死ぬ**（cross-review H-5）。必ず画面に出す。
+    qbSave.addEventListener('click', () => {
+      saveToDevice().catch((e) => {
+        console.error('[safety-patrol] saveToDevice failed:', e);
+        setQueueNote('端末に保存できませんでした');
+      });
+    });
     window.addEventListener('online', () => { renderQueueBanner(); drainQueue(); });
     window.addEventListener('offline', renderQueueBanner);
     setInterval(drainQueue, 15000);
@@ -933,6 +987,15 @@
       const items = (await idbGetAll() || []).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
       for (const item of items) {
         if ((item.retryCount || 0) >= MAX_RETRY) continue; // 失敗確定は素通り
+        // ⚠⚠ **バックオフを実際に効かせているのはこの 1 行**（2026-09-05 クロスレビュー H-1）。
+        //   初版は RETRY_DELAYS_MS を scheduleRetry の遅延にしか使っておらず、
+        //   `setInterval(drainQueue, 15000)` が無条件で叩き続けるので **15 秒間隔のまま**だった
+        //   （＝ retryCount が 15 秒ごとに +1 し、MAX_RETRY=50 に約 12 分で到達して恒久停止）。
+        //   ⛔ このゲートを外すとバックオフ表がまた飾りになる。
+        if (item.nextAttemptAt && Date.now() < item.nextAttemptAt) continue;
+        // ⚠ 遅い回線を殺さないよう、失敗を重ねた item ほどタイムアウトを伸ばす（H-4）。
+        //   直列 drain なので、この 1 本の item に対してだけ効く。
+        requestTimeoutMs = timeoutForAttempt(item.retryCount || 0);
         try {
           await processQueueItem(item);
           await idbDelete(item.id);
@@ -942,12 +1005,13 @@
           item.retryCount = (item.retryCount || 0) + 1;
           // ⚠ タイムアウトは AbortError で来る。現場に「切れた」と分かる言葉で残す
           //   (破棄ダイアログに出るのはこの文字列)。
-          item.lastError =
-            err && err.name === 'AbortError'
-              ? `通信が遅くて時間切れになりました（${Math.round(REQUEST_TIMEOUT_MS / 1000)}秒）`
-              : err && err.message
-                ? err.message
-                : String(err);
+          item.lastError = isAbortError(err)
+            ? `通信が遅くて時間切れになりました（${Math.round(requestTimeoutMs / 1000)}秒）`
+            : err && err.message
+              ? err.message
+              : String(err);
+          // 次に試してよい時刻を item 自身に持たせる（＝バックオフの実体）。
+          item.nextAttemptAt = Date.now() + retryDelayFor(item.retryCount);
           await idbPut(item);
           if (item.retryCount < MAX_RETRY) willRetry = true; // まだ再試行する
         }
@@ -984,8 +1048,12 @@
     if (item.type === 'new') {
       // 二重 insert 防止: storagePath は item 固有なので自然キーになる。
       // 「アップ成功・insert 応答だけ消失」でリトライしても重複行を作らない。
-      const { data: existing } = await supabase
+      // ⚠ 重複チェックの error を握り潰さない（cross-review M-5）。ここが落ちると
+      //   `existing` が null になり、**重複チェックを素通りして INSERT に進む**。
+      //   落ちたこと自体は致命ではない（下の 23505 で受け止める）ので通すが、黙らせない。
+      const { data: existing, error: dupErr } = await supabase
         .from('js_safety_findings').select('id').eq('before_photo_path', item.storagePath).limit(1);
+      if (dupErr) console.warn('[safety-patrol] 重複チェックに失敗（INSERT で受け止める）:', dupErr.message);
       if (!existing || existing.length === 0) {
         const { error } = await supabase.from('js_safety_findings').insert({
           patrol_date: item.patrol_date,
@@ -995,7 +1063,11 @@
           before_photo_path: item.storagePath,
           created_by: 'mobile',
         });
-        if (error) throw error;
+        // ⚠⚠ **23505（before_photo_path の UNIQUE 違反）は「もう入っている」＝実質成功**
+        //   （cross-review M-5）。失敗として throw すると、行は既に在るのに送信待ちのまま
+        //   retryCount を食い潰し、最後は「送信できない」になって現場に破棄させる。
+        //   storagePath は item の UUID 由来で他の写真と衝突しないので、重複＝自分の再送。
+        if (error && error.code !== '23505') throw error;
       }
     } else {
       // 先勝ち: 既に After がある行には書かない(二重フォローの後勝ち上書き防止)。
@@ -1010,18 +1082,17 @@
   }
 
   /**
-   * 次の再送を予約する。⚠ **待ち時間はキュー内で一番進んでいない失敗回数で決める**
-   * ── 1 件だけ何度も失敗している状況で、後から積んだ新しい写真まで 10 分待たせないため。
-   * ⛔ 固定 8 秒に戻さないこと(電波が無い場所で 8 秒ごとに叩き続けると電池を食う)。
+   * 次の再送を予約する。
+   *
+   * ⚠⚠ **待ち時間を決めているのはここではない**（2026-09-05 クロスレビュー H-1 で是正）。
+   * カデンツの実体は `drainQueueInner` の `item.nextAttemptAt` ゲート。ここは
+   * 「15 秒の定期 tick より早く様子を見に行く」だけの補助で、⛔ **ここに遅延計算を
+   * 戻さないこと** ── 2 本の仕組みが併存すると、どちらが効いているか分からなくなる
+   * （初版はまさにそれで、バックオフ表が飾りになっていた）。
    */
   function scheduleRetry() {
     if (retryTimer) return;
-    const minFails = queueItems.reduce(
-      (m, i) => Math.min(m, i.retryCount || 0),
-      Number.MAX_SAFE_INTEGER
-    );
-    const delay = retryDelayFor(minFails === Number.MAX_SAFE_INTEGER ? 0 : minFails);
-    retryTimer = setTimeout(() => { retryTimer = null; drainQueue(); }, delay);
+    retryTimer = setTimeout(() => { retryTimer = null; drainQueue(); }, RETRY_DELAYS_MS[0]);
   }
 
   function renderQueueBanner() {
@@ -1034,13 +1105,19 @@
     //   MAX_RETRY まで自動再送を続けているので、その文言は嘘になるうえ、
     //   現場に「もう破棄するしかない」と誤解させて写真を消させる(2026-09-05)。
     const warned = queueItems.filter(i => (i.retryCount || 0) >= WARN_RETRY).length;
+    // ⚠⚠ **本当に諦めた分**（MAX_RETRY 到達＝もう 1 回も叩かない）。
+    //   初版はこれを数えず、諦めた後も「電波の良い所で自動送信」と出し続けていた
+    //   ＝ 現場が良い場所へ移動して待っても永久に何も起きない（2026-09-05 クロスレビュー H-2）。
+    //   ⛔ 「言い切るのをやめる」と「諦めたことを言わない」を混同しないこと。
+    const dead = queueItems.filter(i => (i.retryCount || 0) >= MAX_RETRY).length;
     const retrying = queueItems.some(i => (i.retryCount || 0) > 0);
 
     queueBanner.classList.toggle('offline', !navigator.onLine && warned === 0);
     queueBanner.classList.toggle('error', warned > 0 || (navigator.onLine && retrying));
 
     let text;
-    if (!navigator.onLine) text = `📴 オフライン — 送信待ち ${n}件（接続後に自動送信）`;
+    if (dead > 0) text = `✕ 送信できない ${dead}件（端末に保存するか、再送してください）`;
+    else if (!navigator.onLine) text = `📴 オフライン — 送信待ち ${n}件（接続後に自動送信）`;
     else if (draining) text = `📤 送信中… 残り ${n}件`;
     else if (warned > 0) text = `⚠️ まだ送れていません ${n}件（電波の良い所で自動送信）`;
     else if (retrying) text = `⚠️ 送信待ち ${n}件（自動で再送します）`;
@@ -1054,6 +1131,17 @@
     // ⛔ 「保存」を「破棄」より **先(左)** に置くこと ── 逃がす手を与えずに消させない。
     qbSave.classList.toggle('hidden', warned === 0);
     qbDiscard.classList.toggle('hidden', warned === 0);
+
+    // ⚠⚠ **バナーの実高さを測って本文の下余白に入れる**(cross-review M-1)。
+    //   ⛔ 固定値に戻さないこと ── ボタンの増減・文言の折り返し・端末幅で高さは変わる。
+    //   初版は 108px 固定で、同じコミットで足した 3 つ目のボタンに足りていなかった。
+    //   ★ ここは textContent と hidden を全部確定させた **後** に測ること(順序が意味を持つ)。
+    //   ⚠ 実 DOM 以外（テストのハーネス等）では documentElement / offsetHeight が
+    //     無いことがある。⛔ ここで落ちると **送信そのものが止まる**（refreshQueueMirror
+    //     経由で呼ばれる）ので、高さの計測は必ず任意扱いにする。
+    const h = queueBanner.offsetHeight || 0;
+    const root = document.documentElement;
+    if (h > 0 && root && root.style) root.style.setProperty('--queue-pad', (h + 28) + 'px');
   }
 
   /**
@@ -1067,33 +1155,93 @@
    * ⚠ iOS は共有シート経由(navigator.share)でないと写真アプリへ入らないので、
    *   使えるならそちらを優先し、無ければダウンロードに倒す。
    */
+  /**
+   * 保存対象を組み立てる（同期・⚠ **await を挟まないこと**）。
+   *
+   * ⚠⚠ iOS Safari の Web Share API は **トランジェント・ユーザー活性化**を要求し、
+   * `await` を跨ぐと `NotAllowedError` で落ちる。初版は先頭で `await idbGetAll()` して
+   * いたので、iOS では共有シートが出ない公算が高かった（cross-review H-6）。
+   * ∴ blob を持つメモリミラー `queueItems` から**同期で**組み、最初の await を
+   * `navigator.share()` 自身にする。⛔ ここに await を足さないこと。
+   *
+   * ⚠ 壊れた item（blob 欠落）は落とす。`new File([undefined], …)` は throw せず
+   * **文字列 "undefined" の 9 バイトのゴミ**を作る（実測）ので、素通しすると
+   * 「保存できた」と見えて中身が無い、という最悪の形になる（cross-review H-5）。
+   */
+  function buildSaveFiles() {
+    if (typeof File !== 'function') return [];
+    return queueItems
+      .filter(it => it && it.blob instanceof Blob && (it.retryCount || 0) >= WARN_RETRY)
+      .slice()
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1)) // 撮影順（drain と同じ規則）
+      .map((it, i) => {
+        const ext = ((it.storagePath || '').split('.').pop() || 'jpg');
+        // ⚠ follow の payload には patrol_date が無いので createdAt で代替する。
+        const day = (it.patrol_date || String(it.createdAt || '').slice(0, 10) || '')
+          .replace(/-/g, '');
+        const kind = it.type === 'follow' ? 'フォロー' : '安全指摘';
+        return new File([it.blob], `${kind}_${day}_${i + 1}.${ext}`, {
+          type: it.contentType || 'image/jpeg',
+        });
+      });
+  }
+
+  /**
+   * 送信できていない写真を**端末に保存**する（最後の砦）。
+   *
+   * 【なぜ要るか】キューの写真はブラウザの中(IndexedDB)にしか無い。撮影は
+   * `capture="environment"` なので **カメラロールには残っていない**。∴ 送信が続けて
+   * 失敗したとき、現場に残された操作が「破棄」しか無いと **原本ごと消える**。
+   *
+   * ⚠⚠ **結果を必ず画面に出す**（cross-review H-5）。初版は `void saveToDevice()` で
+   * 例外を握りつぶし、成功も失敗も無言だった ── 最後の砦が無反応だと、現場は
+   * 「逃げ場が無い」と判断して破棄を押す＝この修正が防ごうとした事故そのものが起きる。
+   */
   async function saveToDevice() {
-    const items = await idbGetAll() || [];
-    if (!items.length) return;
-    const files = items.map((it, i) => {
-      const ext = (it.storagePath.split('.').pop() || 'jpg');
-      const name = `安全指摘_${(it.patrol_date || '').replace(/-/g, '')}_${i + 1}.${ext}`;
-      return new File([it.blob], name, { type: it.contentType || 'image/jpeg' });
-    });
+    const files = buildSaveFiles();
+    if (!files.length) {
+      setQueueNote('保存できる写真がありませんでした');
+      return;
+    }
     try {
       if (navigator.canShare && navigator.canShare({ files }) && navigator.share) {
         await navigator.share({ files, title: '安全パトロール 指摘写真' });
+        setQueueNote(`${files.length}件を共有しました（写真アプリに保存してください）`);
         return;
       }
     } catch (e) {
-      if (e && e.name === 'AbortError') return; // 利用者が共有シートを閉じただけ
-      // 共有が使えない端末 → 下のダウンロードに倒す
+      if (isAbortError(e)) return; // 利用者が共有シートを閉じただけ
+      // 共有が使えない/拒否された端末 → 下のダウンロードに倒す
     }
-    // フォールバック: 1 枚ずつダウンロード。⚠ 連続で走らせるとブロックされる端末が
-    //   あるので間隔を空ける。
+    // フォールバック: 1 枚ずつダウンロード。
+    // ⚠ 2 枚目以降はユーザー活性化を失っており、端末によってはブロックされる。
+    //   ∴ 何枚保存できたかを必ず出す（黙って 1 枚だけ、を作らない）。
+    let saved = 0;
     for (const f of files) {
-      const url = URL.createObjectURL(f);
-      const a = document.createElement('a');
-      a.href = url; a.download = f.name;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      try {
+        const url = URL.createObjectURL(f);
+        const a = document.createElement('a');
+        a.href = url; a.download = f.name;
+        document.body.appendChild(a); a.click(); a.remove();
+        // ⚠ プレビューが開いたまま失効しないよう長めに持つ。
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        saved++;
+      } catch (e) {
+        console.error('[safety-patrol] download failed:', e);
+      }
       await new Promise(r => setTimeout(r, 400));
     }
+    setQueueNote(
+      saved === files.length
+        ? `${saved}件をダウンロードしました`
+        : `${saved}/${files.length}件しか保存できませんでした（1枚ずつお試しください）`
+    );
+  }
+
+  /** バナーに一時的な結果を出す（次の renderQueueBanner で通常表示へ戻る）。 */
+  function setQueueNote(msg) {
+    qbText.textContent = msg;
+    setTimeout(renderQueueBanner, 4000);
   }
 
   // 1件破棄。アップロード済みなら Storage の孤児ファイルを best-effort で掃除する。
