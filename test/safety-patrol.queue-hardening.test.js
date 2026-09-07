@@ -265,7 +265,9 @@ test('④ 破棄の確認は「カメラロールに無い」ことを言う', (
 test('⑤ 23505（重複）は成功として扱う', () => {
   // ⚠ storagePath は item の UUID 由来なので、重複＝自分の再送＝行は既に在る。
   //    throw すると送信待ちのまま retryCount を食い潰し、最後は現場に破棄させる。
-  const fn = fnBody('async function processQueueItem');
+  // ⚠ 2026-09-07 に DB 書き込みは processQueueItem から `writeDbRow` へ切り出した
+  //    （処理自体は変えていない）。⛔ 照合先を processQueueItem に戻さないこと。
+  const fn = fnBody('async function writeDbRow');
   assert.match(fn, /error\.code !== '23505'/, '23505 を失敗として扱っている');
   assert.match(fn, /error: dupErr/, '重複チェックの error を握り潰している');
 });

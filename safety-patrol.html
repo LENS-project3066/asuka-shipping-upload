@@ -384,6 +384,24 @@
   //   q0.8 は等倍で見比べて許容と判断(浅井さん確認済)。⛔ 寸法を削る案は不採用。
   const JPEG_QUALITY = 0.8;
 
+  // 先行サムネ(2026-09-07)。⚠⚠ **上の「寸法を削る案は不採用」を覆すものではない** ──
+  //   原寸(2048/q0.8)は据え置きのまま、**その手前に軽い 1 枚を先に送る**だけ。
+  //
+  // 【なぜ要るか】2026-09-05 の対策は「同じ 400-600KB を粘って送り切る」方向だけで、
+  //   **送る量を 1 バイトも減らしていなかった**。∴ 42kbps を下回る回線では何回粘っても
+  //   構造的に完走しない。2026-09-07 の安全パトロールで iPhone 側が実際に詰まり、
+  //   現場が破棄して**是正写真と失敗理由が両方消えた**(Storage には 1 枚も届いていなかった)。
+  // ★ 直し方: 「写真が着く」と「指摘が登録される」を切り離す。30-50KB のサムネを先に
+  //   上げて DB 行を確定させれば、業務価値(指摘が一覧に出る)は 1/10 の通信量で確保できる。
+  //   原寸は**同じ storagePath へ後から upsert** するので、PC 側もスキーマも改修不要。
+  // ⚠ 原寸が永久に届かなければサムネが最終画質になる。∴ 極端に小さくしないこと。
+  const THUMB_EDGE = 640;
+  const THUMB_QUALITY = 0.6;
+  // サムネは短命キャッシュにする。⚠ 原寸に差し替わったとき CDN が古いサムネを返し続けると
+  //   「いつまでも粗いまま」に見えるため。原寸側は既定(3600)でよい。
+  const THUMB_CACHE_CONTROL = '60';
+  const FULL_CACHE_CONTROL = '3600';
+
   // アップロードのタイムアウト(ms)。
   // ⚠⚠ **これが無いと電波が弱い所で fetch がハングし、drain ループの `draining` が
   //   立ちっぱなしになって「今すぐ再送」も 15 秒間隔の自動再送も入口で弾かれる**
@@ -404,6 +422,15 @@
   const timeoutForAttempt = (n) => Math.min(BASE_TIMEOUT_MS * (1 + n), MAX_TIMEOUT_MS);
   /** 現在の drain 対象に適用中のタイムアウト（直列 drain なので 1 本で足りる）。 */
   let requestTimeoutMs = BASE_TIMEOUT_MS;
+
+  // 無進捗タイムアウト(2026-09-07)。⚠⚠ **壁時計で切ると「遅いが確実に進んでいる回線」を
+  //   完走目前で殺す** ── 上の 90 秒は 462KB を 42kbps で送り切れる値だが、低データモードや
+  //   混雑でそれを下回ると、何度リトライしても毎回 95% 送ったところで捨てることになる。
+  // ★ 正しい判定は「時間が経ったか」ではなく「**進んでいるか**」。XHR の
+  //   `upload.onprogress` は 1 バイト進むたびに鳴るので、**最後の進捗から** この時間が
+  //   経ったときだけ切る。20kbps でも進んでいる限り完走する。
+  // ⛔ この値を壁時計タイムアウトに読み替えないこと（全体で 30 秒という意味ではない）。
+  const STALL_TIMEOUT_MS = 30000;
 
   /**
    * タイムアウト(abort)由来の失敗か。
@@ -442,6 +469,84 @@
     const timer = setTimeout(() => ctl.abort(), requestTimeoutMs);
     return fetch(input, Object.assign({}, init, { signal: ctl.signal }))
       .finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * Storage へアップロードする（**進捗つき**・2026-09-07）。
+   *
+   * ⚠⚠ supabase-js の `storage.upload()` を使わないのは、fetch では「送信がどこまで
+   *   進んだか」が取れず **壁時計でしか切れない**ため。それだと遅いだけの回線を完走目前で
+   *   殺す。XHR なら `upload.onprogress` が取れるので **無進捗のときだけ**切れる。
+   * ⚠ 送る HTTP は supabase-js と**等価**にしてある（CDN バンドルの `uploadOrUpdate` を
+   *   読み、実物に撃って 200 / mimetype / cacheControl を確認済み・2026-09-07）:
+   *     POST {url}/storage/v1/object/{bucket}/{path}
+   *     headers: apikey / Authorization: Bearer / x-upsert
+   *     body: FormData( cacheControl=<n>, ''=<blob> )   ← フィールド名は **空文字**
+   * ⛔ `Content-Type` を自分で付けないこと（multipart の boundary が壊れる）。
+   * ⛔ フィールド名の `''` を `'file'` 等に変えないこと（サーバーが本体を見つけられない）。
+   * ⚠ mimetype は blob の `type` から決まる（実測で確認済み）ので、blob 側を正しくすること。
+   */
+  function uploadWithProgress(path, blob, cacheControl) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      let stallTimer = null;
+      let stalled = false;
+      const clearStall = () => { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } };
+      // ⚠ 進捗のたびに張り直す ＝ 「**最後の進捗からの**経過」で切る。
+      //   ⛔ ここを一度きりの setTimeout に戻すと、ただの壁時計タイムアウトに退化する。
+      const armStall = () => {
+        clearStall();
+        stallTimer = setTimeout(() => { stalled = true; xhr.abort(); }, STALL_TIMEOUT_MS);
+      };
+      const fail = (msg, name) => {
+        clearStall();
+        const err = new Error(msg);
+        if (name) err.name = name;
+        reject(err);
+      };
+      xhr.open('POST', `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`);
+      xhr.setRequestHeader('apikey', SUPABASE_KEY);
+      xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_KEY}`);
+      xhr.setRequestHeader('x-upsert', 'true');
+      xhr.upload.addEventListener('progress', armStall);
+      xhr.addEventListener('load', () => {
+        clearStall();
+        if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+        // ⚠ 失敗理由は現場の画面に出る（破棄ダイアログだけでなくバナーからも読める）。
+        //   ∴ status を必ず残す ── 2026-09-07 は理由が誰にも見られないまま消えた。
+        let msg = `アップロードに失敗しました (HTTP ${xhr.status})`;
+        try {
+          const j = JSON.parse(xhr.responseText);
+          if (j && j.message) msg = `${j.message} (HTTP ${xhr.status})`;
+        } catch (e) { /* 本文が JSON でなくても status だけは伝わる */ }
+        fail(msg);
+      });
+      xhr.addEventListener('error', () => fail('通信に失敗しました（電波を確認してください）'));
+      xhr.addEventListener('abort', () => fail(
+        stalled
+          ? `通信が ${Math.round(STALL_TIMEOUT_MS / 1000)} 秒止まりました（電波の良い所で自動再送します）`
+          : '送信を中断しました',
+        'StallError'
+      ));
+      const form = new FormData();
+      form.append('cacheControl', String(cacheControl));
+      form.append('', blob);
+      armStall(); // 1 バイトも送れない回線でも必ず切れるよう、送信前に張っておく
+      xhr.send(form);
+    });
+  }
+
+  /**
+   * Storage アップロードの入口。XHR が使えない環境では supabase-js に倒す
+   * （進捗で切れないだけで、動作は従来どおり）。
+   */
+  async function uploadBlob(path, blob, cacheControl, contentType) {
+    if (typeof XMLHttpRequest === 'function' && typeof FormData === 'function') {
+      return uploadWithProgress(path, blob, cacheControl);
+    }
+    const { error } = await supabase.storage.from(BUCKET)
+      .upload(path, blob, { contentType, upsert: true, cacheControl });
+    if (error) throw error;
   }
 
   const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
@@ -494,6 +599,9 @@
   let selectedFindingId = null;
   let followFile = null;
   let newFile = null;
+  // 先行送信用サムネ(2026-09-07)。⚠ 間に合わなければ null のまま＝従来どおり原寸だけ送る。
+  let followThumb = null;
+  let newThumb = null;
   let totalSubmitted = 0;
 
   // 送信待ちキュー (IndexedDB 永続 + メモリミラー)
@@ -570,6 +678,13 @@
         console.error('[safety-patrol] saveToDevice failed:', e);
         setQueueNote('端末に保存できませんでした');
       });
+    });
+    // ⚠ バナー本体のタップで失敗理由を出す(2026-09-07)。⛔ この配線を消さないこと ──
+    //   消すと lastError はまた「破棄ダイアログの中だけ」に戻り、原因が消える経路が復活する。
+    //   ボタンのタップは本来の動作を優先する。
+    queueBanner.addEventListener('click', (e) => {
+      if (e && e.target && e.target.closest && e.target.closest('button')) return;
+      showQueueErrors();
     });
     window.addEventListener('online', () => { renderQueueBanner(); drainQueue(); });
     window.addEventListener('offline', renderQueueBanner);
@@ -748,6 +863,7 @@
   function selectFinding(f) {
     selectedFindingId = f.id;
     followFile = null;
+    followThumb = null; // ⚠ 別の指摘へ移るときに前の写真のサムネを持ち越さない
     followCameraInput.value = '';
     followGalleryInput.value = '';
     followPhotoPreview.innerHTML = 'After写真を撮影または選択';
@@ -782,6 +898,7 @@
         workplace_name: f ? f.workplace_name : '',
         comment: f ? f.comment : '',
         blob: followFile,
+        thumbBlob: followThumb, // ⚠ null なら従来どおり原寸だけ送る(安全側)
         contentType: followFile.type,
         ext: (followFile.name.split('.').pop() || 'jpg').toLowerCase(),
       });
@@ -795,6 +912,7 @@
     if (f) f.isDone = true;
     selectedFindingId = null;
     followFile = null;
+    followThumb = null;
     followForm.classList.add('hidden');
     followStatus.classList.add('hidden');
     renderFindingList();
@@ -841,6 +959,7 @@
         workplace_id: parseInt(workplaceSelect.value, 10),
         comment: commentInput.value.trim(),
         blob: newFile,
+        thumbBlob: newThumb, // ⚠ null なら従来どおり原寸だけ送る(安全側)
         contentType: newFile.type,
         ext: (newFile.name.split('.').pop() || 'jpg').toLowerCase(),
       });
@@ -857,6 +976,7 @@
     // フォームを即クリア(職場は連続入力のため残す)
     commentInput.value = '';
     newFile = null;
+    newThumb = null;
     newCameraInput.value = '';
     newGalleryInput.value = '';
     newPhotoPreview.innerHTML = '写真を撮影または選択';
@@ -882,6 +1002,12 @@
   //   さらに再送間隔を指数的に伸ばして、電池と通信を無駄に使わずに粘る。
   const WARN_RETRY = 5;   // これを超えたら画面で知らせる(ボタンを出す)。⛔ 送信は止めない
   const MAX_RETRY = 50;   // ここまで来たら本当に諦める(恒久エラーの打ち切り)
+  // 原寸の後追い(Phase3)だけが残っている item を諦める回数(2026-09-07)。
+  // ⚠⚠ **MAX_RETRY より*ずっと早く*諦めるのが正しい** ── この段まで来た item は
+  //   指摘も写真(サムネ)も既にサーバーに在り、残っているのは**画質を上げる作業だけ**。
+  //   そこで現場を待たせて「送信できない ◯件」を出し続けると、逃げ場が無いと感じた人が
+  //   破棄を押す ＝ 2026-09-07 に実際に起きたことを繰り返す。
+  const FULL_GIVEUP_RETRY = 8;
   /** 連続失敗回数 → 次に試すまでの待ち時間(ms)。15秒→30秒→1分→3分→10分で頭打ち。 */
   const RETRY_DELAYS_MS = [15000, 30000, 60000, 180000, 600000];
   const retryDelayFor = (n) => RETRY_DELAYS_MS[Math.min(n, RETRY_DELAYS_MS.length - 1)];
@@ -1010,10 +1136,17 @@
             : err && err.message
               ? err.message
               : String(err);
-          // 次に試してよい時刻を item 自身に持たせる（＝バックオフの実体）。
-          item.nextAttemptAt = Date.now() + retryDelayFor(item.retryCount);
-          await idbPut(item);
-          if (item.retryCount < MAX_RETRY) willRetry = true; // まだ再試行する
+          // ⚠⚠ 原寸の後追い(Phase3)だけが残っている item は、**指摘も写真も既に在る**。
+          //   ここで粘っても得られるのは画質だけなので、早めに降ろして現場を解放する。
+          //   ⛔ この分岐を消すと「送信できない ◯件」が出続け、また破棄させることになる。
+          if (item.dbDone && item.retryCount >= FULL_GIVEUP_RETRY) {
+            await idbDelete(item.id);
+          } else {
+            // 次に試してよい時刻を item 自身に持たせる（＝バックオフの実体）。
+            item.nextAttemptAt = Date.now() + retryDelayFor(item.retryCount);
+            await idbPut(item);
+            if (item.retryCount < MAX_RETRY) willRetry = true; // まだ再試行する
+          }
         }
         await refreshQueueMirror();
       }
@@ -1034,17 +1167,68 @@
     if (f) { f.after_photo_path = item.storagePath; f.isDone = true; f._pendingFollow = false; }
   }
 
+  /**
+   * 原寸の後追いアップロードが要るか(2026-09-07)。
+   *
+   * ⚠ 旧版でキューに残った item は `thumbBlob` も `fullUploaded` も持たない。その場合
+   *   Phase1 で上げたのは**原寸そのもの**なので、後追いを走らせると同じ 400-600KB を
+   *   無駄に送り直すことになる(細い回線ではそれ自体が詰まりの種)。
+   *   ∴ 後追いの対象は「**サムネを先に送った item**」だけ。
+   */
+  function needsFullUpload(item) {
+    if (!item.thumbBlob) return false;
+    return !item.fullUploaded;
+  }
+
   async function processQueueItem(item) {
-    // Phase1: Storage アップロード。部分成功後のリトライで二重にならないよう
-    // storageUploaded フラグ + upsert:true。
+    // ============================================================
+    // Phase1: **最小の 1 枚**を Storage へ(2026-09-07)
+    // ============================================================
+    // ⚠⚠ ここで原寸(400-600KB)を送っていたことが 2026-09-07 の詰まりの構造的な原因。
+    //   「写真が着く」と「指摘が登録される」が一蓮托生で、400KB が通らないと **1KB の
+    //   DB 行すら作られなかった**(現に Storage には 1 枚も届かず、指摘も 1 件も残らなかった)。
+    //   ∴ サムネ(30-50KB)があれば**そちらを先に**送り、業務価値を 1/10 の通信量で確定させる。
+    // ⚠ 部分成功後のリトライで二重にならないよう storageUploaded フラグ + upsert:true。
     if (!item.storageUploaded) {
-      const { error: upErr } = await supabase.storage.from(BUCKET)
-        .upload(item.storagePath, item.blob, { contentType: item.contentType, upsert: true });
-      if (upErr) throw upErr;
+      const first = item.thumbBlob || item.blob;
+      await uploadBlob(
+        item.storagePath,
+        first,
+        item.thumbBlob ? THUMB_CACHE_CONTROL : FULL_CACHE_CONTROL,
+        item.thumbBlob ? 'image/jpeg' : item.contentType
+      );
       item.storageUploaded = true;
+      // サムネを使わなかったなら、この 1 枚が原寸そのもの＝ Phase3 は不要。
+      item.fullUploaded = !item.thumbBlob;
       await idbPut(item);
     }
-    // Phase2: DB 書込み
+    // ============================================================
+    // Phase2: DB 書込み(ここが通れば指摘が一覧に出る＝業務価値が確定する)
+    // ============================================================
+    if (!item.dbDone) {
+      await writeDbRow(item);
+      item.dbDone = true;
+      await idbPut(item);
+    }
+    // ============================================================
+    // Phase3: 原寸を**同じパスへ**後追い upsert(2026-09-07)
+    // ============================================================
+    // ⚠ ここが落ちても指摘は既に登録済みなので、実害は「画質が粗いまま」だけ。
+    //   ∴ drain 側ではこの段だけ早めに諦めてキューから降ろす(現場を待たせない)。
+    // ⛔ 別パスに保存しないこと ── PC の指摘ビューアは before/after のパスをそのまま
+    //   読むので、**同じパスへ上書き**すれば PC もスキーマも改修なしで高画質に差し替わる。
+    if (needsFullUpload(item)) {
+      await uploadBlob(item.storagePath, item.blob, FULL_CACHE_CONTROL, item.contentType);
+      item.fullUploaded = true;
+      await idbPut(item);
+    }
+  }
+
+  /**
+   * 指摘行を書く(new=insert / follow=update)。
+   * ⚠ **冪等であること** ── Phase1/Phase3 の失敗でこの関数は何度も呼ばれうる。
+   */
+  async function writeDbRow(item) {
     if (item.type === 'new') {
       // 二重 insert 防止: storagePath は item 固有なので自然キーになる。
       // 「アップ成功・insert 応答だけ消失」でリトライしても重複行を作らない。
@@ -1111,15 +1295,22 @@
     //   ⛔ 「言い切るのをやめる」と「諦めたことを言わない」を混同しないこと。
     const dead = queueItems.filter(i => (i.retryCount || 0) >= MAX_RETRY).length;
     const retrying = queueItems.some(i => (i.retryCount || 0) > 0);
+    // ⚠⚠ 原寸の後追いだけが残っている状態を「送れていません」と言わない(2026-09-07)。
+    //   指摘も写真も既にサーバーに在り、残っているのは**画質を上げる作業だけ**。
+    //   ここで危機的な文言を出すと、現場は「もう破棄するしかない」と判断する
+    //   ＝ 2026-09-07 に是正写真と失敗理由が両方消えた経路そのもの。
+    const allDbDone = n > 0 && queueItems.every(i => i.dbDone);
 
     queueBanner.classList.toggle('offline', !navigator.onLine && warned === 0);
-    queueBanner.classList.toggle('error', warned > 0 || (navigator.onLine && retrying));
+    // ⚠ 画質待ちだけの状態は赤くしない(不安を煽って破棄させない)。
+    queueBanner.classList.toggle('error', !allDbDone && (warned > 0 || (navigator.onLine && retrying)));
 
     let text;
-    if (dead > 0) text = `✕ 送信できない ${dead}件（端末に保存するか、再送してください）`;
+    if (dead > 0) text = `✕ 送信できない ${dead}件（タップで理由・端末に保存できます）`;
     else if (!navigator.onLine) text = `📴 オフライン — 送信待ち ${n}件（接続後に自動送信）`;
     else if (draining) text = `📤 送信中… 残り ${n}件`;
-    else if (warned > 0) text = `⚠️ まだ送れていません ${n}件（電波の良い所で自動送信）`;
+    else if (allDbDone) text = `🖼 画質を上げる送信が残っています ${n}件（指摘は登録済みです）`;
+    else if (warned > 0) text = `⚠️ まだ送れていません ${n}件（自動再送中・タップで理由）`;
     else if (retrying) text = `⚠️ 送信待ち ${n}件（自動で再送します）`;
     else text = `📤 送信待ち ${n}件`;
     qbText.textContent = text;
@@ -1129,8 +1320,10 @@
     qbRetry.classList.toggle('hidden', !(navigator.onLine && retrying && !draining));
     // 端末に保存 / 破棄: 知らせるしきい値を超えてから出す。
     // ⛔ 「保存」を「破棄」より **先(左)** に置くこと ── 逃がす手を与えずに消させない。
-    qbSave.classList.toggle('hidden', warned === 0);
-    qbDiscard.classList.toggle('hidden', warned === 0);
+    // ⚠ 画質待ちだけの item には出さない ── 写真は既に Storage に在るので「端末に保存」は
+    //   要らず、「破棄」の警告文(元に戻せません)も**嘘になる**。
+    qbSave.classList.toggle('hidden', warned === 0 || allDbDone);
+    qbDiscard.classList.toggle('hidden', warned === 0 || allDbDone);
 
     // ⚠⚠ **バナーの実高さを測って本文の下余白に入れる**(cross-review M-1)。
     //   ⛔ 固定値に戻さないこと ── ボタンの増減・文言の折り返し・端末幅で高さは変わる。
@@ -1238,10 +1431,41 @@
     );
   }
 
-  /** バナーに一時的な結果を出す（次の renderQueueBanner で通常表示へ戻る）。 */
-  function setQueueNote(msg) {
+  /**
+   * バナーに一時的な結果を出す（次の renderQueueBanner で通常表示へ戻る）。
+   * ⚠ タイマーは 1 本に束ねる ── 束ねないと、長く出したい表示が後から来た短い表示の
+   *   タイマーに巻き込まれて先に消える。
+   */
+  let queueNoteTimer = null;
+  function setQueueNote(msg, ms) {
     qbText.textContent = msg;
-    setTimeout(renderQueueBanner, 4000);
+    if (queueNoteTimer) clearTimeout(queueNoteTimer);
+    queueNoteTimer = setTimeout(() => { queueNoteTimer = null; renderQueueBanner(); }, ms || 4000);
+  }
+
+  /**
+   * 送信待ちの**失敗理由**を画面に出す(2026-09-07)。
+   *
+   * ⚠⚠ これまで `lastError` は**破棄ダイアログの中にしか出なかった** ── つまり
+   *   「消す瞬間にだけ見える」設計だった。2026-09-07 の安全パトロールでは現場が破棄した
+   *   結果、**写真と一緒に失敗理由も消え**、iPhone 側で何が起きていたのか誰にも
+   *   分からなくなった（Storage にも DB にも痕跡が無い＝後から追う手が一切残らない）。
+   * ★ ∴ 破棄しなくても読めるようにする。原因が分かれば次は直せる。
+   */
+  function showQueueErrors() {
+    const failed = queueItems.filter(i => i.lastError);
+    if (!failed.length) {
+      setQueueNote(`送信待ち ${queueItems.length}件（まだエラーは出ていません）`);
+      return;
+    }
+    // ⚠ 同じ理由が並ぶだけなので種類ごとにまとめる（3 件並べても情報は増えない）。
+    const counts = new Map();
+    for (const i of failed) counts.set(i.lastError, (counts.get(i.lastError) || 0) + 1);
+    const lines = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([msg, c]) => (c > 1 ? `${msg} (${c}件)` : msg));
+    setQueueNote(lines.join(' / '), 12000);
   }
 
   // 1件破棄。アップロード済みなら Storage の孤児ファイルを best-effort で掃除する。
@@ -1291,37 +1515,61 @@
   // 共通ユーティリティ
   // ========================================
 
-  // 写真を canvas で縮小し JPEG に再エンコードして返す(M-8)。縮小不要・デコード不可・
-  // 未対応ブラウザでは原本をそのまま返す(回転事故やデータ破損を起こさない安全側)。
+  // 写真を canvas で長辺 maxEdge まで縮小し JPEG に再エンコードする共通実装。
+  // 成功したら File、できなければ **null**(呼び側が原本に倒すか諦めるかを決める)。
   // EXIF 回転は createImageBitmap の imageOrientation:'from-image' で物理的に反映する。
   // これを怠ると再エンコードで EXIF が剥がれ、縦写真が横倒しで保存されてしまう。
-  async function shrinkImage(file) {
-    if (!file || !file.type || !file.type.startsWith('image/')) return file;
-    if (typeof createImageBitmap !== 'function') return file; // 未対応(回転反映できない)→原本
+  async function encodeResized(file, maxEdge, quality, skipIfSmaller) {
+    if (!file || !file.type || !file.type.startsWith('image/')) return null;
+    if (typeof createImageBitmap !== 'function') return null; // 未対応(回転反映できない)
     let bitmap;
     try {
       bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
     } catch (e) {
-      return file; // HEIC 等デコード不可 → 原本のまま(現状動作維持)
+      return null; // HEIC 等デコード不可
     }
     try {
       const longEdge = Math.max(bitmap.width, bitmap.height);
-      if (longEdge <= MAX_EDGE) return file; // 既に十分小さい → 再圧縮しない
-      const scale = MAX_EDGE / longEdge;
+      if (skipIfSmaller && longEdge <= maxEdge) return null; // 既に十分小さい → 再圧縮しない
+      // ⚠ 拡大はしない(1.0 で頭打ち)。小さい原本をサムネ化するときに引き伸ばさないため。
+      const scale = Math.min(1, maxEdge / longEdge);
       const w = Math.round(bitmap.width * scale);
       const h = Math.round(bitmap.height * scale);
       const canvas = document.createElement('canvas');
       canvas.width = w;
       canvas.height = h;
       canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
-      const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', JPEG_QUALITY));
-      if (!blob || blob.size >= file.size) return file; // 縮小で逆に増えたら原本
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+      if (!blob) return null;
       return new File([blob], 'photo.jpg', { type: 'image/jpeg' });
     } catch (e) {
-      return file;
+      return null;
     } finally {
       if (bitmap && bitmap.close) bitmap.close();
     }
+  }
+
+  // 送信する原寸を作る(M-8)。縮小不要・デコード不可・未対応ブラウザでは原本をそのまま
+  // 返す(回転事故やデータ破損を起こさない安全側)。
+  async function shrinkImage(file) {
+    if (!file) return file;
+    const out = await encodeResized(file, MAX_EDGE, JPEG_QUALITY, true);
+    if (!out || out.size >= file.size) return file; // 作れない/逆に増えた → 原本
+    return out;
+  }
+
+  /**
+   * 先行送信用のサムネを作る(2026-09-07)。作れなければ **null**＝従来どおり原寸だけ送る。
+   *
+   * ⚠ shrinkImage と違って **原本にフォールバックしない**。ここで原本を返すと
+   *   「軽い 1 枚を先に送る」という目的が消え、細い回線で 400KB を 2 回送ることになる
+   *   ＝ 直そうとしている症状を悪化させる。作れないなら黙って諦めるのが正しい。
+   */
+  async function makeThumb(file) {
+    const t = await encodeResized(file, THUMB_EDGE, THUMB_QUALITY, false);
+    if (!t) return null;
+    if (file && t.size >= file.size) return null; // 逆に増えるなら意味が無い
+    return t;
   }
 
   function handlePhoto(file, mode) {
@@ -1330,24 +1578,34 @@
     const cameraInput = mode === 'follow' ? followCameraInput : newCameraInput;
     const galleryInput = mode === 'follow' ? followGalleryInput : newGalleryInput;
 
-    if (mode === 'follow') followFile = file;
-    else newFile = file;
+    if (mode === 'follow') { followFile = file; followThumb = null; }
+    else { newFile = file; newThumb = null; }
 
-    // 縮小は裏で実行(楽観 write-behind の即時性を保つ)。プレビューは原本で即表示し、
+    // 縮小とサムネは裏で実行(楽観 write-behind の即時性を保つ)。プレビューは原本で即表示し、
     // 縮小が間に合えば差し替える。送信が縮小より早ければ原本を送る(=安全フォールバック)。
-    shrinkImage(file).then(shrunk => {
-      if (shrunk === file) return;
-      // 縮小中にユーザーが写真を外した/差し替えた場合は上書きしない
-      if (mode === 'follow') { if (followFile === file) followFile = shrunk; }
-      else { if (newFile === file) newFile = shrunk; }
-    }).catch(() => { /* 原本のまま */ });
+    // ⚠⚠ 縮小とサムネを**別々の then で書かないこと**(2026-09-07) ── 先に縮小が終わって
+    //   newFile を縮小版へ差し替えると、後から来たサムネ側の `newFile === file` が偽になり、
+    //   「写真を差し替えた」と誤判定して**毎回サムネを捨てる**。∴ 判定は 1 箇所にまとめる。
+    Promise.all([shrinkImage(file), makeThumb(file)]).then(([shrunk, thumb]) => {
+      // 処理中にユーザーが写真を外した/差し替えた場合は上書きしない
+      const current = mode === 'follow' ? followFile : newFile;
+      if (current !== file) return;
+      if (mode === 'follow') {
+        if (shrunk !== file) followFile = shrunk;
+        followThumb = thumb;
+      } else {
+        if (shrunk !== file) newFile = shrunk;
+        newThumb = thumb;
+      }
+    }).catch(() => { /* 原本のまま・サムネ無し */ });
 
     const reader = new FileReader();
     reader.onload = (e) => {
       preview.innerHTML = `<img src="${e.target.result}" alt="preview"><button class="photo-remove">✕</button>`;
       preview.querySelector('.photo-remove').addEventListener('click', () => {
-        if (mode === 'follow') followFile = null;
-        else newFile = null;
+        // ⚠ サムネも一緒に捨てる。残すと次の写真に**前の写真のサムネ**が付く。
+        if (mode === 'follow') { followFile = null; followThumb = null; }
+        else { newFile = null; newThumb = null; }
         cameraInput.value = '';
         galleryInput.value = '';
         preview.innerHTML = mode === 'follow' ? 'After写真を撮影または選択' : '写真を撮影または選択';

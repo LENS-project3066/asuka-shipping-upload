@@ -13,165 +13,21 @@
  * (2) 正常な新規送信が enqueue 失敗(idbPut TDZ 含む)を起こさないこと
  * を検証する。ブラウザ非依存の軽量スタブ(jsdom/fake-indexeddb 不要)。
  *
+ * ⚠ ハーネス本体は 2026-09-07 に `./_harness.js` へ切り出した（送信フローを実行する
+ *   upload-flow テストと共有するため）。**既定のスタブは従来どおり「画像 API も XHR も
+ *   無い環境」**なので、このテストの射程は変わっていない。
+ *   ⛔ ここで imageSupport/xhr を既定 ON にしないこと ── 「最小の端末でも落ちない」
+ *      という、このテストが見ている性質が消える。
+ *
  * 実行: `node --test`（この repo に npm 依存は追加しない）
  */
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
+const { extractScript, runScript, delay } = require('./_harness');
 
 const HTML_PATH = path.join(__dirname, '..', 'safety-patrol.html');
-
-// ---- <script>(function(){...})</script> 本体を抽出 ----
-function extractScript(html) {
-  const lines = html.split(/\r?\n/);
-  const start = lines.findIndex((l) => l.includes('(function()'));
-  const end = lines.findIndex((l, i) => i > start && l.includes('</script>'));
-  assert.ok(start >= 0 && end > start, 'IIFE <script> ブロックを抽出できること');
-  return lines.slice(start, end).join('\n');
-}
-
-// ---- 最小 DOM/ブラウザスタブ + 実 IIFE 通し実行ランナー ----
-function runScript(scriptText, { savedLocation = 'honsha' } = {}) {
-  const consoleErrors = [];
-  const els = {};       // id -> element(同一 id は同一インスタンスを返す=状態を保持)
-  const handlers = {};  // "id:event" -> fn
-
-  const makeEl = (id) => {
-    if (els[id]) return els[id];
-    const el = {
-      id, value: '', textContent: '', innerHTML: '', src: '', disabled: false,
-      dataset: {}, style: {}, files: [],
-      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-      addEventListener(ev, fn) { handlers[`${id}:${ev}`] = fn; },
-      removeEventListener() {},
-      click() { const h = handlers[`${id}:click`]; if (h) h(); },
-      appendChild() {}, removeChild() {}, remove() {},
-      setAttribute() {}, removeAttribute() {}, scrollIntoView() {},
-      querySelector() { return makeEl(`${id}__q`); }, querySelectorAll() { return []; },
-      closest() { return null; },
-    };
-    els[id] = el;
-    return el;
-  };
-
-  const documentStub = {
-    getElementById: (id) => makeEl(id),
-    querySelector: (s) => makeEl(`q:${s}`),
-    querySelectorAll: () => [],
-    createElement: (t) => makeEl(`el:${t}:${Math.random()}`),
-    addEventListener() {},
-    get body() { return makeEl('body'); },
-  };
-
-  // 動く最小 IndexedDB(open→transaction→put/getAll/delete が success を返す)
-  const makeIDB = () => {
-    const stores = {};
-    const store = (n) => (stores[n] || (stores[n] = new Map()));
-    const req = (op) => {
-      const r = {};
-      queueMicrotask(() => {
-        try { r.result = op(); r.onsuccess && r.onsuccess({ target: r }); }
-        catch (e) { r.error = e; r.onerror && r.onerror({ target: r }); }
-      });
-      return r;
-    };
-    return {
-      open(name) {
-        const r = {};
-        queueMicrotask(() => {
-          const db = {
-            objectStoreNames: { contains: (n) => n in stores },
-            createObjectStore: (n) => { store(n); return {}; },
-            transaction: (n) => {
-              const s = store(n);
-              const os = {
-                put: (item) => req(() => { s.set(item.id, item); return item.id; }),
-                get: (k) => req(() => s.get(k)),
-                getAll: () => req(() => [...s.values()]),
-                delete: (k) => req(() => { s.delete(k); }),
-              };
-              const tx = { _c: null, _e: null, _a: null, _err: null };
-              const txObj = { objectStore: () => os };
-              Object.defineProperty(txObj, 'oncomplete', {
-                set(v) { tx._c = v; queueMicrotask(() => tx._c && tx._c()); }, get() { return tx._c; },
-              });
-              Object.defineProperty(txObj, 'onerror', { set(v) { tx._e = v; }, get() { return tx._e; } });
-              Object.defineProperty(txObj, 'onabort', { set(v) { tx._a = v; }, get() { return tx._a; } });
-              Object.defineProperty(txObj, 'error', { get() { return tx._err; } });
-              return txObj;
-            },
-          };
-          r.result = db;
-          r.onupgradeneeded && r.onupgradeneeded({ target: r });
-          r.onsuccess && r.onsuccess({ target: r });
-        });
-        return r;
-      },
-    };
-  };
-  const indexedDBStub = makeIDB();
-
-  const supaChain = () => {
-    const p = Promise.resolve({ data: [], error: null });
-    return new Proxy(function () {}, {
-      get: (_t, prop) => {
-        if (prop === 'then') return p.then.bind(p);
-        if (prop === 'catch') return p.catch.bind(p);
-        if (prop === 'finally') return p.finally.bind(p);
-        return () => supaChain();
-      },
-      apply: () => supaChain(),
-    });
-  };
-  const supabaseClient = {
-    from: () => supaChain(),
-    storage: { from: () => ({ upload: async () => ({ error: null }), remove: async () => ({ error: null }) }) },
-  };
-
-  const mkStorage = (init) => {
-    const m = { ...init };
-    return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, removeItem: (k) => { delete m[k]; } };
-  };
-
-  const windowStub = {
-    supabase: { createClient: () => supabaseClient },
-    indexedDB: indexedDBStub,             // probeIndexedDB は window.indexedDB を見る
-    crypto: { randomUUID: () => 'id-' + Math.random().toString(16).slice(2) },
-    addEventListener() {},
-    navigator: { onLine: true },
-  };
-  const navigatorStub = { onLine: true, locks: undefined };
-  const cryptoStub = windowStub.crypto;
-  const consoleStub = { error: (...a) => consoleErrors.push(a), log() {}, warn() {}, info() {} };
-  const FileReaderStub = class { readAsDataURL() { if (this.onload) this.onload({ target: { result: 'data:,' } }); } };
-  // 15s drain interval でプロセスを生かし続けない / retry/probe タイマーもテストを止めない
-  const setIntervalStub = () => 0;
-  const setTimeoutStub = (fn, ms) => { const t = globalThis.setTimeout(fn, ms); if (t && t.unref) t.unref(); return t; };
-  const clearTimeoutStub = (t) => globalThis.clearTimeout(t);
-
-  let loadError = null;
-  // 直接 eval: script 内の bare グローバル(window/document/…)は下記ローカルに束縛される。
-  // Promise/queueMicrotask/Date/Math 等は Node 実グローバルをそのまま使う。
-  (function (window, document, navigator, indexedDB, sessionStorage, localStorage,
-             crypto, console, setInterval, setTimeout, clearTimeout, createImageBitmap, FileReader, location) {
-    try {
-      // eslint-disable-next-line no-eval
-      eval(scriptText);
-    } catch (e) {
-      loadError = e;
-    }
-  })(windowStub, documentStub, navigatorStub, indexedDBStub, mkStorage({ safetyPatrolLocation: savedLocation }),
-     mkStorage({}), cryptoStub, consoleStub, setIntervalStub, setTimeoutStub, clearTimeoutStub,
-     undefined /* createImageBitmap: 未対応扱い→縮小スキップ */, FileReaderStub, { href: 'https://x/safety-patrol.html' });
-
-  const fire = (id, ev, arg) => { const h = handlers[`${id}:${ev}`]; if (!h) throw new Error(`handler ${id}:${ev} 未登録`); return h(arg); };
-  const enqueueFailed = () => consoleErrors.some((a) => String(a[0] || '').includes('enqueue('));
-
-  return { loadError, consoleErrors, els, handlers, fire, enqueueFailed };
-}
-
-const delay = (ms) => new Promise((r) => globalThis.setTimeout(r, ms));
 
 // =============================== テスト ===============================
 
