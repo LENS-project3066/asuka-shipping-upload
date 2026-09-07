@@ -489,16 +489,35 @@
    * ⚠⚠ supabase-js の `storage.upload()` を使わないのは、fetch では「送信がどこまで
    *   進んだか」が取れず **壁時計でしか切れない**ため。それだと遅いだけの回線を完走目前で
    *   殺す。XHR なら `upload.onprogress` が取れるので **無進捗のときだけ**切れる。
-   * ⚠ 送る HTTP は supabase-js と**等価**にしてある（CDN バンドルの `uploadOrUpdate` を
-   *   読み、実物に撃って 200 / mimetype / cacheControl を確認済み・2026-09-07）:
+   * 【⛔⛔ multipart はやめた（2026-09-07 夕・S879）── FormData へ戻さないこと】
+   * ⚠⚠ 初版は supabase-js の形をそのまま写して
+   *   `FormData(cacheControl=<n>, ''=<blob>)` の **multipart** で送っていた。
+   *   ⛔ 旧 JSDoc の「Content-Type を自分で付けないこと」「フィールド名の `''` を変えないこと」は
+   *   **この multipart 前提の話**で、生ボディにした今は**逆**（Content-Type は必須）。
+   *   訂正の経緯を消さないために両方ここに残す。
+   *
+   * 【なぜやめたか】iPhone 2 台（黒鎺さん・石田君＝**別人**）で送信だけが通らず、
+   *   Android は **4G でも WiFi でも**通った ＝ 帯域でも端末設定でもない。
+   *   ★ 旧版(supabase-js)と新版(XHR)で**共通していた唯一のもの**が、この
+   *   **「フィールド名が空文字の multipart」**だった（supabase-js もブラウザではこの形）。
+   *   ∴ WebKit の multipart 実装に依存しない形へ寄せる。
+   *
+   * 【今の形】⚠ 実物に撃って確認済み（2026-09-07・`scripts/probe-storage-raw-body.js`
+   *   ＝ juchu-system 側。200 / `Content-Type: image/jpeg` / `cache-control: max-age=60` が
+   *   公開 URL から読めることまで見た）:
    *     POST {url}/storage/v1/object/{bucket}/{path}
-   *     headers: apikey / Authorization: Bearer / x-upsert
-   *     body: FormData( cacheControl=<n>, ''=<blob> )   ← フィールド名は **空文字**
-   * ⛔ `Content-Type` を自分で付けないこと（multipart の boundary が壊れる）。
-   * ⛔ フィールド名の `''` を `'file'` 等に変えないこと（サーバーが本体を見つけられない）。
-   * ⚠ mimetype は blob の `type` から決まる（実測で確認済み）ので、blob 側を正しくすること。
+   *     headers: apikey / Authorization: Bearer / x-upsert /
+   *              Content-Type: <画像の型> / cache-control: max-age=<n>
+   *     body: **blob そのもの**（FormData を通さない）
+   * ⚠ `cacheControl` は FormData のフィールドではなく **ヘッダー**で渡す（形が変わった）。
+   * ⚠ mimetype は Content-Type ヘッダーで決まる。⛔ 付け忘れると型が化ける
+   *   （実測では付けなくても 200 は返るので、**失敗では気づけない**）。
+   *
+   * ⚠⚠ supabase-js の `storage.upload()` を使わないのは、fetch では「送信がどこまで
+   *   進んだか」が取れず **壁時計でしか切れない**ため。それだと遅いだけの回線を完走目前で
+   *   殺す。XHR なら `upload.onprogress` が取れるので **無進捗のときだけ**切れる。
    */
-  function uploadWithProgress(path, blob, cacheControl) {
+  function uploadWithProgress(path, blob, cacheControl, contentType) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       let stallTimer = null;
@@ -530,6 +549,11 @@
       xhr.setRequestHeader('apikey', SUPABASE_KEY);
       xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_KEY}`);
       xhr.setRequestHeader('x-upsert', 'true');
+      // ⛔ 生ボディなので Content-Type は**必須**（multipart 時代の「付けるな」とは逆）。
+      //    付け忘れても 200 は返るので、失敗では気づけない ── 型が黙って化ける。
+      xhr.setRequestHeader('Content-Type', contentType || blob.type || 'application/octet-stream');
+      // ⚠ cacheControl は FormData のフィールドではなくヘッダーで渡す（形が変わった）。
+      xhr.setRequestHeader('cache-control', `max-age=${cacheControl}`);
       // 上り: 1 バイト進むたび / 本文を送り終えた瞬間
       xhr.upload.addEventListener('progress', bump);
       xhr.upload.addEventListener('load', bump);
@@ -557,14 +581,13 @@
           : '送信を中断しました',
         'StallError'
       ));
-      const form = new FormData();
-      form.append('cacheControl', String(cacheControl));
-      form.append('', blob);
       // 送信前にも張っておく（接続すら張れない回線で永久に待たないため）。
       // ⚠ この時点では sawSignal=false ＝ **長い方**の枠。進捗を報告しない端末を
       //   「無進捗」と誤診しないための要。⛔ ここで STALL_TIMEOUT_MS を直に使わないこと。
       armStall();
-      xhr.send(form);
+      // ⛔⛔ **FormData に包まないこと**（上の ⛔⛔ を読むこと）。iPhone 2 台で
+      //    送信だけが通らなかったときに、旧版・新版で共通していた唯一の構造がこれ。
+      xhr.send(blob);
     });
   }
 
@@ -573,9 +596,15 @@
    * （進捗で切れないだけで、動作は従来どおり）。
    */
   async function uploadBlob(path, blob, cacheControl, contentType) {
-    if (typeof XMLHttpRequest === 'function' && typeof FormData === 'function') {
-      return uploadWithProgress(path, blob, cacheControl);
+    // ⚠ 生ボディ送信になったので **FormData の有無はもう条件ではない**（2026-09-07 夕）。
+    //   ⛔ `typeof FormData === 'function'` を条件に戻さないこと ── multipart を
+    //   使わないのに FormData の存在を要求すると、無い端末が無意味に fallback へ落ちる。
+    if (typeof XMLHttpRequest === 'function') {
+      return uploadWithProgress(path, blob, cacheControl, contentType);
     }
+    // ⚠⚠ ここ（XHR が無い端末）だけは supabase-js に倒れる ＝ **multipart のまま**。
+    //   iPhone の詰まりが multipart 由来なら、この経路は同じ穴を持つ。今は「XHR が無い」
+    //   端末が現実に居ないので据え置くが、⛔ 「全経路 multipart を捨てた」と要約しないこと。
     const { error } = await supabase.storage.from(BUCKET)
       .upload(path, blob, { contentType, upsert: true, cacheControl });
     if (error) throw error;

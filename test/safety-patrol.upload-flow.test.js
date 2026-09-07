@@ -44,11 +44,20 @@ async function submitOne(opts) {
 }
 
 /** FormData から本体 Blob を取り出す（フィールド名は空文字）。 */
+/**
+ * 送られた本体を取り出す。
+ *
+ * ⚠⚠ **2026-09-07 夕に契約が変わった**（⛔ FormData を期待する形へ戻さないこと）──
+ * iPhone 2 台（別人）で送信だけが通らず Android は 4G/WiFi 両方で通ったので、
+ * 旧版・新版に共通していた **「フィールド名が空文字の multipart」** をやめ、
+ * **blob をそのまま body** に載せる形にした。
+ */
 function bodyBlob(rec) {
-  assert.ok(rec.body && typeof rec.body.get === 'function', 'FormData で送っていない');
-  const b = rec.body.get('');
-  assert.ok(b, 'FormData のフィールド名が空文字でない（サーバーが本体を見つけられない）');
-  return b;
+  assert.ok(rec.body, '本体を送っていない');
+  assert.ok(typeof rec.body.get !== 'function',
+    'FormData で送っている = multipart に戻っている（iPhone で通らなかった形）');
+  assert.ok(typeof rec.body.size === 'number', 'body が Blob でない');
+  return rec.body;
 }
 
 // ================================================================
@@ -77,9 +86,17 @@ test('① Phase1 で送られるのはサムネで、原寸よりはっきり小
 
 test('① サムネのキャッシュは短命、原寸は通常（差し替えが見えるようにする）', async () => {
   const h = await submitOne({ imageSupport: true, xhr: true });
-  const c1 = h.xhrCalls[0].body.get('cacheControl');
-  const c2 = h.xhrCalls[1].body.get('cacheControl');
-  assert.ok(Number(c1) < Number(c2),
+  // ⚠ cacheControl は FormData のフィールドから **ヘッダー**へ移った（2026-09-07 夕）。
+  const num = (rec) => {
+    const v = rec.headers['cache-control'];
+    assert.ok(v, 'cache-control ヘッダーを送っていない');
+    const m = String(v).match(/max-age=(\d+)/);
+    assert.ok(m, `cache-control の形が想定外: ${v}`);
+    return Number(m[1]);
+  };
+  const c1 = num(h.xhrCalls[0]);
+  const c2 = num(h.xhrCalls[1]);
+  assert.ok(c1 < c2,
     `サムネの cacheControl(${c1}) が原寸(${c2}) 以上 = 粗いままキャッシュされ続ける`);
 });
 

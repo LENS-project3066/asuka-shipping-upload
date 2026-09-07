@@ -185,18 +185,31 @@ test('② 進捗が 1 度も来ていない間は短い枠を当てない（無�
     'タイマーの武装が 2 つの枠を signal の有無で使い分けていない');
 });
 
-test('② supabase-js と等価な HTTP を送る（実測で確認した形から外れていない）', () => {
+/**
+ * ⚠⚠ **2026-09-07 夕に期待を反転した**（⛔ 元へ戻さないこと・訂正の経緯ごと残す）。
+ * 旧テストは multipart 前提で「フィールド名が空文字であること」「**Content-Type を
+ * 付けていないこと**」を固定していた。iPhone 2 台（黒鎺さん・石田君＝別人）で送信だけが
+ * 通らず、Android は 4G/WiFi 両方で通ったので、旧版(supabase-js)と新版(XHR)に
+ * **共通していた唯一の構造 = 空フィールド名の multipart** をやめ、生ボディにした。
+ * ∴ 今は **Content-Type が必須**で、FormData は**使ってはいけない**。
+ * サーバー側が生ボディを受けることは実物で確認済み
+ * （juchu-system `scripts/probe-storage-raw-body.js`・200 / image/jpeg / max-age=60）。
+ */
+test('② Storage へ生ボディで送る（multipart に戻っていない）', () => {
   const fn = fnBody('function uploadWithProgress');
   assert.match(fn, /xhr\.open\(\s*['"]POST['"]/, 'POST でない');
   assert.match(fn, /storage\/v1\/object\//, 'Storage のエンドポイントでない');
   assert.match(fn, /setRequestHeader\(\s*['"]x-upsert['"]\s*,\s*['"]true['"]\s*\)/, 'x-upsert が無い');
   assert.match(fn, /setRequestHeader\(\s*['"]apikey['"]/, 'apikey が無い');
-  // ⛔ フィールド名は空文字。'file' 等に変えるとサーバーが本体を見つけられない。
-  assert.match(fn, /append\(\s*['"]{2}\s*,\s*blob\s*\)/, 'FormData のフィールド名が空文字でない');
-  assert.match(fn, /append\(\s*['"]cacheControl['"]/, 'cacheControl を送っていない');
-  // ⛔ Content-Type を自分で付けると multipart の boundary が壊れる。
-  assert.ok(!/setRequestHeader\(\s*['"]content-type['"]/i.test(fn),
-    'Content-Type を自分で設定している（boundary が壊れる）');
+  // ⛔ FormData を使わない（iPhone で通らなかった形）
+  assert.ok(!/new\s+FormData\s*\(/.test(fn), 'FormData を作っている = multipart に戻っている');
+  assert.match(fn, /xhr\.send\(\s*blob\s*\)/, 'blob をそのまま送っていない');
+  // ⛔ 生ボディでは Content-Type が必須（付け忘れても 200 は返るので失敗では気づけない）
+  assert.match(fn, /setRequestHeader\(\s*['"]Content-Type['"]/i,
+    'Content-Type を送っていない = 保存される型が化ける');
+  // cacheControl はヘッダーへ移った
+  assert.match(fn, /setRequestHeader\(\s*['"]cache-control['"]/i,
+    'cache-control をヘッダーで送っていない（サムネが粗いままキャッシュされ続ける）');
 });
 
 test('② XHR が無い環境では supabase-js に倒す（機能を落とすだけで壊さない）', () => {
