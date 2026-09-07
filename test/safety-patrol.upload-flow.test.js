@@ -212,3 +212,39 @@ test('\u2466 \u30ad\u30e5\u30fc\u306b\u7a4d\u3080\u306e\u306f Blob \u3067\u306f\
     }
   }
 });
+
+/**
+ * ⑧ **縮小の質**（2026-09-07 夕・S879）。
+ *
+ * iPhone の写真は Android と同じ 1536x2048 なのに **621KB vs 243KB（2.5 倍）** で、
+ * 重いのに汚かった。ノイズは高周波なので JPEG が食う ── 数字の矛盾が
+ * そのまま症状の説明になっている。
+ * 初版は `drawImage` を 1 発だけで呼び、**補間の質を指定していなかった**（既定は low）。
+ * iOS はここの既定が粗く、サムネは 4032→640 の **6.3 倍縮小**を 1 発でやっていた。
+ *
+ * ⚠⚠ **このテストは「iPhone で綺麗になった」を証明しない。**
+ *   ハーネスの canvas は実際には描かないので、見ているのは
+ *   **「補間を high にしたか」「段階的に落としたか」の 2 点だけ**。
+ */
+test('\u2467 \u7e2e\u5c0f\u306f\u88dc\u9593 high \u3067\u3001\u5927\u304d\u3044\u7e2e\u5c0f\u306f\u6bb5\u968e\u7684\u306b\u843d\u3068\u3059', async () => {
+  const h = await submitOne({ imageSupport: true, xhr: true });
+  const ops = h.canvasOps;
+  assert.ok(ops.length > 0, 'canvas に 1 度も描いていない = この検査に検出力が無い');
+  for (const o of ops) {
+    assert.strictEqual(o.quality, 'high',
+      'imageSmoothingQuality を high にしていない（既定 low は iOS でザラつく）');
+    assert.strictEqual(o.smoothing, true, 'imageSmoothingEnabled を立てていない');
+  }
+  // 原本 4032x3024 → サムネ 640: 1 発では落とさない（4032/640 = 6.3 倍）
+  const thumbSteps = ops.filter(o => Math.max(o.w, o.h) <= 2048);
+  assert.ok(thumbSteps.length >= 2,
+    `サムネを 1 発で縮めている(段数=${thumbSteps.length}) = 画素を間引くだけになる`);
+  // どの 1 段も 2 倍を超えて縮めない（超えると補間が効かない）
+  let prev = 4032;
+  for (const o of ops) {
+    const cur = Math.max(o.w, o.h);
+    if (cur > prev) { prev = cur; continue; } // 別系統（原寸/サムネ）の描き始め
+    assert.ok(prev / cur <= 2.01, `1 段で ${(prev / cur).toFixed(1)} 倍縮めている（2 倍以内にすること）`);
+    prev = cur;
+  }
+});

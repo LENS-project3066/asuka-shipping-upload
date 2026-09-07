@@ -1617,6 +1617,48 @@
   // 共通ユーティリティ
   // ========================================
 
+  /**
+   * 縮小して描く（**補間を指定し、段階的に落とす**・2026-09-07 夕・S879）。
+   *
+   * ⚠⚠ 初版は `ctx.drawImage(bitmap, 0, 0, w, h)` の 1 発だけで、**補間の質を指定して
+   *   いなかった**（既定は `'low'`）。iOS はここの既定が特に粗く、縮小でノイズが
+   *   平均化されず**そのまま拾ってザラつく**。実際 iPhone の写真は Android と
+   *   同じ 1536x2048 なのに **621KB vs 243KB（2.5 倍）** で、重いのに汚かった
+   *   ── ノイズは高周波なので JPEG が食う。数字の矛盾がそのまま症状の説明になっている。
+   * ⚠ サムネは 4032→640 ＝ **6.3 倍縮小**。1 発で落とすと画素を間引くだけになるので、
+   *   **半分ずつ**段階的に落とす（各段が 2 倍以内なら補間が効く）。
+   * ⛔ `imageSmoothingQuality` の指定を消さないこと。⛔ 1 発 drawImage に戻さないこと。
+   *
+   * ⚠ **これで直るとはまだ言えない** ── 比較した 2 枚は被写体も明るさも違い、
+   *   ザラつきが「縮小の質」由来か「iPhone の暗所ノイズ」由来か切り分けられていない。
+   *   切り分けるには**同じ物を両方の端末で撮る**しかない。ここで直したのは
+   *   「どちらであっても効く方の穴」だけ。
+   */
+  function drawDownscaled(dstCtx, src, w, h) {
+    let cur = src;
+    let cw = src.width;
+    let ch = src.height;
+    // 半分ずつ。⚠ 目標より小さくしない（行き過ぎると落とした情報を引き伸ばすことになる）。
+    while (cw / 2 >= w && ch / 2 >= h) {
+      const nw = Math.max(w, Math.round(cw / 2));
+      const nh = Math.max(h, Math.round(ch / 2));
+      if (nw >= cw || nh >= ch) break; // 念のため（縮まないなら止める）
+      const tmp = document.createElement('canvas');
+      tmp.width = nw;
+      tmp.height = nh;
+      const tctx = tmp.getContext('2d');
+      tctx.imageSmoothingEnabled = true;
+      tctx.imageSmoothingQuality = 'high';
+      tctx.drawImage(cur, 0, 0, nw, nh);
+      cur = tmp;
+      cw = nw;
+      ch = nh;
+    }
+    dstCtx.imageSmoothingEnabled = true;
+    dstCtx.imageSmoothingQuality = 'high';
+    dstCtx.drawImage(cur, 0, 0, w, h);
+  }
+
   // 写真を canvas で長辺 maxEdge まで縮小し JPEG に再エンコードする共通実装。
   // 成功したら File、できなければ **null**(呼び側が原本に倒すか諦めるかを決める)。
   // EXIF 回転は createImageBitmap の imageOrientation:'from-image' で物理的に反映する。
@@ -1640,7 +1682,7 @@
       const canvas = document.createElement('canvas');
       canvas.width = w;
       canvas.height = h;
-      canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      drawDownscaled(canvas.getContext('2d'), bitmap, w, h);
       const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
       if (!blob) return null;
       return new File([blob], 'photo.jpg', { type: 'image/jpeg' });

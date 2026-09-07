@@ -56,6 +56,7 @@ function runScript(scriptText, opts = {}) {
   const xhrCalls = [];  // 実際に送られたアップロード要求
   const dbCalls = [];   // 実際に撃たれた insert/update
   const timerWaits = []; // setTimeout に渡された待ち時間(ms) の記録
+  const canvasOps = []; // canvas への drawImage の呼び方（縮小の段数と補間の質）
 
   const makeEl = (id) => {
     if (els[id]) return els[id];
@@ -80,7 +81,17 @@ function runScript(scriptText, opts = {}) {
   const makeCanvas = () => {
     const c = {
       width: 0, height: 0,
-      getContext: () => ({ drawImage() {} }),
+      // ⚠ 縮小の**質**が仕様になったので（2026-09-07: iOS の既定補間が粗く、1 発で
+      //   大きく縮めるとノイズを拾ってザラつく）、drawImage の呼び方を記録する。
+      //   ⛔ no-op に戻さないこと ── 戻すと「補間 high」も「段階的縮小」も検定できない。
+      getContext: () => {
+        const ctx = {
+          drawImage(_src, _x, _y, w, h) {
+            canvasOps.push({ w, h, smoothing: ctx.imageSmoothingEnabled, quality: ctx.imageSmoothingQuality });
+          },
+        };
+        return ctx;
+      },
       toBlob: (cb, type, q) => {
         const bytes = Math.max(1, Math.round(c.width * c.height * (q || 0.8) * 0.25));
         cb(new Blob([new Uint8Array(bytes)], { type: type || 'image/jpeg' }));
@@ -257,7 +268,7 @@ function runScript(scriptText, opts = {}) {
   /** IndexedDB に実際に入っている行（キューの中身をそのまま見る）。 */
   const idbRows = () => Object.values(indexedDBStub._stores).flatMap((m) => [...m.values()]);
 
-  return { loadError, consoleErrors, els, handlers, fire, enqueueFailed, xhrCalls, dbCalls, timerWaits, idbRows };
+  return { loadError, consoleErrors, els, handlers, fire, enqueueFailed, xhrCalls, dbCalls, timerWaits, idbRows, canvasOps };
 }
 
 const delay = (ms) => new Promise((r) => globalThis.setTimeout(r, ms));
