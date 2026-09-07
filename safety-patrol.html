@@ -432,6 +432,18 @@
   // ⛔ この値を壁時計タイムアウトに読み替えないこと（全体で 30 秒という意味ではない）。
   const STALL_TIMEOUT_MS = 30000;
 
+  // ⚠⚠ **進捗イベントが 1 度も来ない端末がある**（2026-09-07 夕・黒鎺さんの iPhone。
+  //   サーバー側の痕跡ゼロ・バナーは「📤 送信中…」のまま進まない）。初版は送信前に
+  //   30 秒で武装し、張り直しを `upload.progress` **だけ**に頼っていたので、
+  //   **進捗を報告しない端末では実際に送れていても必ず 30 秒で abort** していた
+  //   ＝「無進捗」のつもりで「**無イベント**」を殺していた。しかも本文を送り終えた後は
+  //   張り直す機会が無く、応答待ちが 30 秒の壁時計に化けていた（旧版は 90 秒＝**退行**）。
+  // ★ 「進捗が報告されない」と「進捗が止まった」は**別の状態**。区別が付かない間に
+  //   短い無進捗判定を当ててはいけないので、最初の生存 signal が来るまではこの長い
+  //   壁時計で待つ。⛔ 2 値を 1 つに戻さないこと。⛔ 120 秒を短くしないこと
+  //   （旧版の 90 秒でも Android は完走していた＝それより短いと退行になる）。
+  const NO_PROGRESS_FALLBACK_MS = 120000;
+
   /**
    * タイムアウト(abort)由来の失敗か。
    *
@@ -492,12 +504,22 @@
       let stallTimer = null;
       let stalled = false;
       const clearStall = () => { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } };
-      // ⚠ 進捗のたびに張り直す ＝ 「**最後の進捗からの**経過」で切る。
+      // ⚠ 生存 signal のたびに張り直す ＝ 「**最後の signal からの**経過」で切る。
       //   ⛔ ここを一度きりの setTimeout に戻すと、ただの壁時計タイムアウトに退化する。
+      // ⚠⚠ **signal が 1 度も来ていない間は短い判定を当てない**（上の NO_PROGRESS_FALLBACK_MS）。
+      //   進捗を報告しない端末で「無進捗」と誤診して、送れているのに毎回 abort していた。
+      let sawSignal = false;
       const armStall = () => {
         clearStall();
-        stallTimer = setTimeout(() => { stalled = true; xhr.abort(); }, STALL_TIMEOUT_MS);
+        stallTimer = setTimeout(
+          () => { stalled = true; xhr.abort(); },
+          sawSignal ? STALL_TIMEOUT_MS : NO_PROGRESS_FALLBACK_MS
+        );
       };
+      // 生存 signal ＝「この通信はまだ動いている」と言える出来事すべて。
+      // ⛔ 上りの progress だけに戻さないこと ── 本文を送り終えると progress は
+      //    二度と鳴らないので、応答待ちが壁時計に化ける（2026-09-07 の退行）。
+      const bump = () => { sawSignal = true; armStall(); };
       const fail = (msg, name) => {
         clearStall();
         const err = new Error(msg);
@@ -508,7 +530,12 @@
       xhr.setRequestHeader('apikey', SUPABASE_KEY);
       xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_KEY}`);
       xhr.setRequestHeader('x-upsert', 'true');
-      xhr.upload.addEventListener('progress', armStall);
+      // 上り: 1 バイト進むたび / 本文を送り終えた瞬間
+      xhr.upload.addEventListener('progress', bump);
+      xhr.upload.addEventListener('load', bump);
+      // 下り: 応答ヘッダが来た / 本文が流れてきた（＝相手は生きている）
+      xhr.addEventListener('readystatechange', () => { if (xhr.readyState >= 2) bump(); });
+      xhr.addEventListener('progress', bump);
       xhr.addEventListener('load', () => {
         clearStall();
         if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
@@ -524,14 +551,19 @@
       xhr.addEventListener('error', () => fail('通信に失敗しました（電波を確認してください）'));
       xhr.addEventListener('abort', () => fail(
         stalled
-          ? `通信が ${Math.round(STALL_TIMEOUT_MS / 1000)} 秒止まりました（電波の良い所で自動再送します）`
+          // ⚠ 秒数は「どちらの枠で切れたか」で変わる。⛔ 30 秒に固定した文言へ戻さないこと
+          //    （進捗を報告しない端末では 120 秒待っており、嘘の数字を現場に出すことになる）。
+          ? `通信が ${Math.round((sawSignal ? STALL_TIMEOUT_MS : NO_PROGRESS_FALLBACK_MS) / 1000)} 秒 動きませんでした（電波の良い所で自動再送します）`
           : '送信を中断しました',
         'StallError'
       ));
       const form = new FormData();
       form.append('cacheControl', String(cacheControl));
       form.append('', blob);
-      armStall(); // 1 バイトも送れない回線でも必ず切れるよう、送信前に張っておく
+      // 送信前にも張っておく（接続すら張れない回線で永久に待たないため）。
+      // ⚠ この時点では sawSignal=false ＝ **長い方**の枠。進捗を報告しない端末を
+      //   「無進捗」と誤診しないための要。⛔ ここで STALL_TIMEOUT_MS を直に使わないこと。
+      armStall();
       xhr.send(form);
     });
   }

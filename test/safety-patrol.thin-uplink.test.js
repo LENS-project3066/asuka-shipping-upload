@@ -145,15 +145,44 @@ test('② 無進捗タイムアウトの値が実用的（★1 値を見る）',
   assert.ok(v >= 15000 && v <= 60000, `STALL_TIMEOUT_MS=${v} が想定外（15-60 秒）`);
 });
 
-test('② 進捗のたびにタイマーを張り直す（壁時計に退化していない）', () => {
+/**
+ * ⚠⚠ **2026-09-07 夕に期待を訂正した**（⛔ 元の形へ戻さないこと）。
+ * 旧テストは「`upload.addEventListener('progress', armStall)` と**書いてあるか**」しか見ておらず、
+ * **本文を送り終えた後に張り直す口が 1 つも無い**ことも、**進捗を報告しない端末を
+ * 「無進捗」と誤診して必ず abort する**ことも通していた。
+ * 実際に黒鎺さんの iPhone で、サーバー側の痕跡ゼロのまま「📤 送信中…」で止まった。
+ * ∴ 見るのは「どの関数名を渡したか」ではなく **①生存 signal を上り/下りの両方から拾うか
+ * ②最初の 1 回が来るまで短い枠を当てないか** の 2 点にした。
+ */
+test('② 生存 signal のたびにタイマーを張り直す（上りの progress だけに頼らない）', () => {
   const fn = fnBody('function uploadWithProgress');
-  // ★2 配線を見る: progress を実際に購読していること
-  assert.match(fn, /upload\.addEventListener\(\s*['"]progress['"]\s*,\s*armStall\s*\)/,
-    'upload.onprogress を購読していない = 進捗でタイマーを張り直せない');
+  // 上り: 進捗と「本文を送り終えた」の両方
+  assert.match(fn, /upload\.addEventListener\(\s*['"]progress['"]/, '上りの progress を購読していない');
+  assert.match(fn, /upload\.addEventListener\(\s*['"]load['"]/,
+    '本文を送り終えた瞬間を購読していない = 応答待ちが壁時計に化ける');
+  // 下り: 応答が動いていることも生存 signal
+  assert.match(fn, /addEventListener\(\s*['"]readystatechange['"]/,
+    '応答ヘッダの到着を購読していない');
   // 張り直しの実体（clear してから set）
   const arm = fn.slice(fn.indexOf('const armStall'));
   assert.match(arm, /clearStall\(\)/, 'タイマーを張り直す前に消していない');
-  assert.match(arm, /setTimeout\([\s\S]{0,80}STALL_TIMEOUT_MS\)/, '無進捗タイマーを張っていない');
+  assert.match(arm, /setTimeout\(/, '無進捗タイマーを張っていない');
+});
+
+test('② 進捗が 1 度も来ていない間は短い枠を当てない（無イベントを無進捗と誤診しない）', () => {
+  const m = SRC.match(/const NO_PROGRESS_FALLBACK_MS\s*=\s*(\d+)/);
+  assert.ok(m, 'NO_PROGRESS_FALLBACK_MS が無い = 進捗を報告しない端末を殺す形に戻っている');
+  const v = Number(m[1]);
+  // ⛔ 旧版(supabase-js + 壁時計 90 秒)で Android は完走していた。それより短いと退行。
+  assert.ok(v >= 90000, `NO_PROGRESS_FALLBACK_MS=${v} が短すぎる（旧版 90 秒より短いと退行）`);
+  // ⚠⚠ **`armStall` の中だけ**を見ること。関数全体に当てると、同じ三項式を書いている
+  //   中断メッセージの側に当たってしまい、**タイマーの武装が 30 秒固定に戻されても緑**になる
+  //   （2026-09-07 に変異注入で実際に素通りした ── 共有の文字列に当てる照合の穴）。
+  const fn = fnBody('function uploadWithProgress');
+  const arm = fn.slice(fn.indexOf('const armStall'), fn.indexOf('const bump'));
+  assert.ok(arm.length > 0, 'armStall の本体を切り出せていない（実装の形が変わった？）');
+  assert.match(arm, /sawSignal\s*\?\s*STALL_TIMEOUT_MS\s*:\s*NO_PROGRESS_FALLBACK_MS/,
+    'タイマーの武装が 2 つの枠を signal の有無で使い分けていない');
 });
 
 test('② supabase-js と等価な HTTP を送る（実測で確認した形から外れていない）', () => {

@@ -55,6 +55,7 @@ function runScript(scriptText, opts = {}) {
   const handlers = {};  // "id:event" -> fn
   const xhrCalls = [];  // 実際に送られたアップロード要求
   const dbCalls = [];   // 実際に撃たれた insert/update
+  const timerWaits = []; // setTimeout に渡された待ち時間(ms) の記録
 
   const makeEl = (id) => {
     if (els[id]) return els[id];
@@ -219,7 +220,11 @@ function runScript(scriptText, opts = {}) {
   const FileReaderStub = class { readAsDataURL() { if (this.onload) this.onload({ target: { result: 'data:,' } }); } };
   // 15s drain interval でプロセスを生かし続けない / retry/probe タイマーもテストを止めない
   const setIntervalStub = () => 0;
-  const setTimeoutStub = (fn, ms) => { const t = globalThis.setTimeout(fn, ms); if (t && t.unref) t.unref(); return t; };
+  // ⚠ 張られたタイマーの **待ち時間** を記録する（2026-09-07 追加）。アップロードの
+  //   無進捗タイマーは「何秒で武装したか」が仕様そのもの ── 進捗イベントを報告しない
+  //   端末に短い枠を当てると、実際は送れているのに毎回 abort する（黒鎺さんの iPhone）。
+  //   実時間を待たずに検証できるよう ms を残す。⛔ 既定の挙動は変えていない。
+  const setTimeoutStub = (fn, ms) => { timerWaits.push(ms); const t = globalThis.setTimeout(fn, ms); if (t && t.unref) t.unref(); return t; };
   const clearTimeoutStub = (t) => globalThis.clearTimeout(t);
   const createImageBitmapStub = imageSupport
     ? async () => ({ width: imageWidth, height: imageHeight, close() {} })
@@ -245,7 +250,7 @@ function runScript(scriptText, opts = {}) {
   const fire = (id, ev, arg) => { const h = handlers[`${id}:${ev}`]; if (!h) throw new Error(`handler ${id}:${ev} 未登録`); return h(arg); };
   const enqueueFailed = () => consoleErrors.some((a) => String(a[0] || '').includes('enqueue('));
 
-  return { loadError, consoleErrors, els, handlers, fire, enqueueFailed, xhrCalls, dbCalls };
+  return { loadError, consoleErrors, els, handlers, fire, enqueueFailed, xhrCalls, dbCalls, timerWaits };
 }
 
 const delay = (ms) => new Promise((r) => globalThis.setTimeout(r, ms));
