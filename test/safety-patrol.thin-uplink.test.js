@@ -83,7 +83,10 @@ test('① サムネは原寸より必ず小さい設定になっている（先�
 test('① Phase1 はサムネがあればサムネを先に送る', () => {
   const fn = fnBody('async function processQueueItem');
   // ⛔ item.blob を直に送る形へ戻すと、この回の修正が丸ごと無効になる。
-  assert.match(fn, /item\.thumbBlob\s*\|\|\s*item\.blob/, 'Phase1 がサムネを優先していない');
+  // ⚠ 2026-09-07 夕: 写真は IndexedDB に **バイト列**で入るので、送る直前に asBlob で
+  //   組み直す（⛔ `item.thumbBlob || item.blob` を直に渡す形へ戻さないこと）。
+  assert.match(fn, /asBlob\(item\.thumbBlob[\s\S]{0,40}\|\|\s*asBlob\(item\.blob/,
+    'Phase1 がサムネを優先していない / バイト列を Blob へ組み直していない');
   assert.match(fn, /item\.storageUploaded\s*=\s*true/, '部分成功フラグを立てていない');
 });
 
@@ -125,7 +128,9 @@ test('① 原寸は「同じパス」へ後追いする（PC 改修を不要に�
   const fn = fnBody('async function processQueueItem');
   assert.match(fn, /needsFullUpload\(item\)/, 'Phase3 のゲートが無い');
   // ⛔ 別パス（_full 等）に保存する形へ変えると、PC の指摘ビューアが原寸を見つけられない。
-  assert.match(fn, /uploadBlob\(item\.storagePath,\s*item\.blob/, '原寸を同じパスへ送っていない');
+  // ⚠ 2026-09-07 夕: バイト列で保持するようになったので asBlob を通す。
+  assert.match(fn, /uploadBlob\(item\.storagePath,\s*asBlob\(item\.blob/,
+    '原寸を同じパスへ送っていない / バイト列を Blob へ組み直していない');
 });
 
 test('① 旧版で積まれた item に後追いを走らせない（同じ原寸を 2 回送らない）', () => {

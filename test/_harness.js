@@ -111,6 +111,10 @@ function runScript(scriptText, opts = {}) {
       return r;
     };
     return {
+      // ⚠ テストから「実際に IndexedDB へ何が入ったか」を見るための口（2026-09-07 追加）。
+      //   写真を Blob のまま入れると iOS で読み戻せない疑いがあり、**入れた形そのもの**が
+      //   仕様になった。⛔ 消さないこと。
+      _stores: stores,
       open() {
         const r = {};
         queueMicrotask(() => {
@@ -250,7 +254,10 @@ function runScript(scriptText, opts = {}) {
   const fire = (id, ev, arg) => { const h = handlers[`${id}:${ev}`]; if (!h) throw new Error(`handler ${id}:${ev} 未登録`); return h(arg); };
   const enqueueFailed = () => consoleErrors.some((a) => String(a[0] || '').includes('enqueue('));
 
-  return { loadError, consoleErrors, els, handlers, fire, enqueueFailed, xhrCalls, dbCalls, timerWaits };
+  /** IndexedDB に実際に入っている行（キューの中身をそのまま見る）。 */
+  const idbRows = () => Object.values(indexedDBStub._stores).flatMap((m) => [...m.values()]);
+
+  return { loadError, consoleErrors, els, handlers, fire, enqueueFailed, xhrCalls, dbCalls, timerWaits, idbRows };
 }
 
 const delay = (ms) => new Promise((r) => globalThis.setTimeout(r, ms));

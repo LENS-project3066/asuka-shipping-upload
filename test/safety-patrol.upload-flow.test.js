@@ -181,3 +181,34 @@ test('⑥ 進捗が来ていない間は長い枠で待つ（無イベントを�
   assert.ok(short > 0,
     '進捗後も長い枠のまま = 無進捗判定が効いていない（死んだ通信を長く掛ける）');
 });
+
+/**
+ * ⑦ **キューに積むのは Blob ではなくバイト列**（2026-09-07 夕・S879）。
+ *
+ * iPhone 2 台（黒鎺さん・石田君＝別人）で送信だけが通らず、Android は 4G/WiFi 両方で通った。
+ * ★ 決め手は **同じリポの index.html（出荷マニュアルの写真アップロード）が谷口さんの
+ *   iPhone で普通に使えている**こと ── あちらは supabase.storage.upload() ＝
+ *   こちらの旧版と同じ multipart なので、**multipart は犯人ではない**。
+ *   2 ページの唯一の差が「その場で送る」か「**IndexedDB へ入れて読み戻してから送る**」か。
+ * ∴ 読み戻した Blob が iOS で使えていない疑いが濃く、バイト列で持つ形に変えた。
+ *
+ * ⚠⚠ **このテストは「iPhone で直った」を証明しない。** ハーネスは iOS の壊れ方を
+ *   再現できないので、証明できるのは **「Blob のまま積んでいない」という不変条件だけ**。
+ *   ⛔ 緑を「直った」と読まないこと ── 実機で 1 枚送るまで仮説のまま。
+ */
+test('\u2466 \u30ad\u30e5\u30fc\u306b\u7a4d\u3080\u306e\u306f Blob \u3067\u306f\u306a\u304f\u30d0\u30a4\u30c8\u5217\uff08iOS \u3067\u8aad\u307f\u623b\u305b\u306a\u3044\u5f62\u3067\u6301\u305f\u306a\u3044\uff09', async () => {
+  // \u9001\u4fe1\u3092\u5931\u6557\u3055\u305b\u3066\u30ad\u30e5\u30fc\u306b\u6b8b\u3057\u3001**\u5b9f\u969b\u306b\u4fdd\u5b58\u3055\u308c\u305f\u5f62**\u3092\u898b\u308b\u3002
+  const h = await submitOne({ imageSupport: true, xhr: true, xhrStatus: 500 });
+  const rows = h.idbRows();
+  assert.ok(rows.length > 0, 'キューに 1 件も積まれていない = この検査に検出力が無い');
+  for (const r of rows) {
+    assert.ok(!(r.blob instanceof Blob),
+      'blob を Blob のまま IndexedDB に入れている（iOS で読み戻せない疑いのある形）');
+    assert.ok(r.blob && typeof r.blob.byteLength === 'number',
+      'blob がバイト列でない（送信時に組み直せない）');
+    if (r.thumbBlob) {
+      assert.ok(!(r.thumbBlob instanceof Blob), 'thumbBlob を Blob のまま入れている');
+      assert.ok(typeof r.thumbBlob.byteLength === 'number', 'thumbBlob がバイト列でない');
+    }
+  }
+});

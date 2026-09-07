@@ -229,7 +229,11 @@ test('④ ダウンロードのフォールバックが実際にクリックす�
 test('④ 壊れた item を保存しない（9 バイトのゴミを作らない）', () => {
   // ⚠ `new File([undefined], …)` は throw せず文字列 "undefined" の 9 バイトを作る（実測）。
   const fn = fnBody('function buildSaveFiles');
-  assert.match(fn, /blob instanceof Blob/, 'blob の実在を確かめていない');
+  // ⚠⚠ **2026-09-07 夕に期待を訂正した**（⛔ `instanceof Blob` へ戻さないこと）。
+  //   写真は IndexedDB に **バイト列(ArrayBuffer)** で入るようになったので、
+  //   `instanceof Blob` では 1 件も拾えず「端末に保存」が**黙って 0 件**になる。
+  //   ⛔ 実在チェック自体は消さないこと ── 上の 9 バイトのゴミが復活する。
+  assert.match(fn, /asBlob\(it\.blob/, 'blob の実在を確かめていない（asBlob で組み直していない）');
   assert.match(fn, /typeof File !== 'function'/, 'File 非対応端末を見ていない');
   assert.match(fn, /createdAt/, '撮影順に並べていない');
 });

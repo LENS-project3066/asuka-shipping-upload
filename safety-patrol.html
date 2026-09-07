@@ -1122,6 +1122,39 @@
 
   // フォームから1件キューに積む。storagePath は item の UUID から決定論的に作る
   // (リトライで二重発番しない + アイテム間で衝突しない=upsert で別写真を上書きしない)。
+  /**
+   * 写真を **バイト列(ArrayBuffer)** にして持つ。
+   *
+   * ⚠⚠⚠ **Blob / File のまま IndexedDB に入れないこと**（2026-09-07 夕・S879）。
+   * iPhone 2 台（黒鎺さん・石田君＝別人）で送信だけが通らず、Android は 4G/WiFi 両方で通った。
+   * ★ 決め手は **同じリポの `index.html`（出荷マニュアルの写真アップロード）が
+   *   谷口さんの iPhone で普通に使えている**こと ── あちらは `supabase.storage.upload()`
+   *   ＝ **こちらの旧版とまったく同じ multipart** で送っている。∴ multipart は犯人ではない。
+   *   2 ページの差は **「入力からその場で送る」か「IndexedDB へ入れて読み戻してから送る」か**
+   *   の 1 点だけ。∴ 読み戻した Blob が iOS で使えていない疑いが濃い（WebKit の既知の弱点）。
+   * ⛔ 「multipart が悪い」「supabase-js に戻せば直る」へ引き返さないこと ──
+   *   どちらも出荷マニュアル側の実績で否定されている。
+   * ⚠ ArrayBuffer は構造化クローンでそのまま複製されるので、Blob の backing store に依存しない。
+   */
+  async function toBytes(b) {
+    if (!b) return null;
+    if (b.byteLength != null) return b;            // 既に ArrayBuffer
+    if (typeof b.arrayBuffer === 'function') return await b.arrayBuffer();
+    return null;
+  }
+
+  /**
+   * 保存したバイト列を送信直前に Blob へ組み直す。
+   * ⚠ 旧版でキューに残った item は Blob のまま入っているので、その場合はそのまま使う
+   *   （⛔ 旧 item を弾かないこと ── 現場に残っている未送信写真が消える）。
+   */
+  function asBlob(v, type) {
+    if (!v) return null;
+    if (typeof Blob === 'function' && v instanceof Blob) return v;
+    if (v.byteLength != null) return new Blob([v], { type: type || 'image/jpeg' });
+    return null;
+  }
+
   async function enqueueUpload(payload) {
     const id = genId();
     const item = {
@@ -1132,6 +1165,9 @@
       retryCount: 0,
       lastError: null,
       ...payload,
+      // ⛔ 上の ⚠⚠⚠ を読むこと。Blob のまま積む形へ戻さない。
+      blob: await toBytes(payload.blob),
+      thumbBlob: await toBytes(payload.thumbBlob),
     };
     await idbPut(item);
     await refreshQueueMirror();
@@ -1251,7 +1287,9 @@
     //   ∴ サムネ(30-50KB)があれば**そちらを先に**送り、業務価値を 1/10 の通信量で確定させる。
     // ⚠ 部分成功後のリトライで二重にならないよう storageUploaded フラグ + upsert:true。
     if (!item.storageUploaded) {
-      const first = item.thumbBlob || item.blob;
+      // ⚠ IndexedDB にはバイト列で入っているので、送る直前に Blob へ組み直す（asBlob）。
+      //   ⛔ `item.thumbBlob` をそのまま渡す形へ戻さないこと（上の ⚠⚠⚠）。
+      const first = asBlob(item.thumbBlob, 'image/jpeg') || asBlob(item.blob, item.contentType);
       await uploadBlob(
         item.storagePath,
         first,
@@ -1279,7 +1317,8 @@
     // ⛔ 別パスに保存しないこと ── PC の指摘ビューアは before/after のパスをそのまま
     //   読むので、**同じパスへ上書き**すれば PC もスキーマも改修なしで高画質に差し替わる。
     if (needsFullUpload(item)) {
-      await uploadBlob(item.storagePath, item.blob, FULL_CACHE_CONTROL, item.contentType);
+      // ⚠ ここも保存はバイト列。⛔ item.blob を直に渡す形へ戻さないこと。
+      await uploadBlob(item.storagePath, asBlob(item.blob, item.contentType), FULL_CACHE_CONTROL, item.contentType);
       item.fullUploaded = true;
       await idbPut(item);
     }
@@ -1425,7 +1464,9 @@
   function buildSaveFiles() {
     if (typeof File !== 'function') return [];
     return queueItems
-      .filter(it => it && it.blob instanceof Blob && (it.retryCount || 0) >= WARN_RETRY)
+      // ⚠ 保存はバイト列になったので `instanceof Blob` では 1 件も拾えない
+      //   （＝「端末に保存」が黙って 0 件になる）。⛔ instanceof 判定へ戻さないこと。
+      .filter(it => it && asBlob(it.blob, it.contentType) && (it.retryCount || 0) >= WARN_RETRY)
       .slice()
       .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1)) // 撮影順（drain と同じ規則）
       .map((it, i) => {
@@ -1434,7 +1475,7 @@
         const day = (it.patrol_date || String(it.createdAt || '').slice(0, 10) || '')
           .replace(/-/g, '');
         const kind = it.type === 'follow' ? 'フォロー' : '安全指摘';
-        return new File([it.blob], `${kind}_${day}_${i + 1}.${ext}`, {
+        return new File([asBlob(it.blob, it.contentType)], `${kind}_${day}_${i + 1}.${ext}`, {
           type: it.contentType || 'image/jpeg',
         });
       });
